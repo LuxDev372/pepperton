@@ -90,7 +90,7 @@ class Engine:
         self._thread = None
         self._reflected_day = 0
         if state:
-            w = self.world
+            world = self.world
             restored_tick = state["tick_no"]
             # reconcile: erase any "memories from the future" written after
             # the checkpoint we are restoring to (crash-recovery integrity)
@@ -115,30 +115,30 @@ class Engine:
                         evs.append(e)
                 evs = evs[-150:]
                 if evs:
-                    w.events = evs
-                    w._event_seq = max(e.get("seq", 0) for e in evs)
+                    world.events = evs
+                    world._event_seq = max(e.get("seq", 0) for e in evs)
             except OSError:
                 pass
-            w.tick_no = state["tick_no"]
-            w.clock.day = state["day"]
-            w.clock.minutes = state["minutes"]
-            w.locations = state["locations"]
-            w.projects = state["projects"]
+            world.tick_no = state["tick_no"]
+            world.clock.day = state["day"]
+            world.clock.minutes = state["minutes"]
+            world.locations = state["locations"]
+            world.projects = state["projects"]
             # merge in locations added by newer versions (e.g. the bank):
             # an old town wakes up and there's a new building on the square
-            new_locs = [k for k in config.LOCATIONS if k not in w.locations]
+            new_locs = [k for k in config.LOCATIONS if k not in world.locations]
             for k in new_locs:
-                w.locations[k] = dict(config.LOCATIONS[k])
+                world.locations[k] = dict(config.LOCATIONS[k])
             # the ledger: restore if saved; a pre-2.0 town gets fresh seeds
             first_economy_boot = getattr(config, "ECONOMY", False) and \
                 "tills" not in state
-            w.recent_says = [tuple(x) for x in state.get("recent_says", [])]
-            w.tills.update(state.get("tills", {}))
-            w.debts = state.get("debts", [])
-            w.promises = state.get("promises", [])
-            w._ledger_seq = state.get("ledger_seq", 0)
-            w._rent_day_done = state.get("rent_day_done", 0)
-            w._ledger_day_done = state.get("ledger_day_done", 0)
+            world.recent_says = [tuple(x) for x in state.get("recent_says", [])]
+            world.tills.update(state.get("tills", {}))
+            world.debts = state.get("debts", [])
+            world.promises = state.get("promises", [])
+            world._ledger_seq = state.get("ledger_seq", 0)
+            world._rent_day_done = state.get("rent_day_done", 0)
+            world._ledger_day_done = state.get("ledger_day_done", 0)
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
@@ -164,21 +164,21 @@ class Engine:
             for a in self.world.agents.values():
                 a.relationships.pop(None, None)
                 a.relationships.pop("null", None)
-            w.emit("world", None,
-                   f"{config.TOWN_NAME} continues. (Day {w.clock.day} — the town "
-                   f"survived an upgrade; nobody noticed a thing.)",
-                   "the plaza", deliver=False)
+            world.emit("world", None,
+                       f"{config.TOWN_NAME} continues. (Day {world.clock.day} — the "
+                       f"town survived an upgrade; nobody noticed a thing.)",
+                       "the plaza", deliver=False)
             if first_economy_boot:
-                bank = w.bank_name()
+                bank = world.bank_name()
                 if bank:
-                    w.emit("world", None,
-                           f"Overnight, scaffolding came down nobody remembers "
+                    world.emit("world", None,
+                               f"Overnight, scaffolding came down nobody remembers "
                            f"going up: {bank} has opened its doors. Money is "
                            f"different now — businesses pay from their tills, "
                            f"rent falls due every {config.RENT_EVERY_DAYS} days, "
                            f"and the bank makes loans against your public record.",
                            bank)
-                    for a in w.agents.values():
+                    for a in world.agents.values():
                         a.pending.append({
                             "text": (f"There is a BANK in town now — {bank}, "
                                      f"open for business. Loans against your "
@@ -187,7 +187,7 @@ class Engine:
                                      f"{config.RENT_EVERY_DAYS} days. The "
                                      f"economy is real now."),
                             "interrupt": False,
-                            "sim_time": w.clock.hhmm,
+                            "sim_time": world.clock.hhmm,
                         })
         else:
             for a in cast:
@@ -546,15 +546,15 @@ class Engine:
             return self._snapshot_locked(since_seq)
 
     def _snapshot_locked(self, since_seq=0):
-        w = self.world
+        world = self.world
         return {
             "town": config.TOWN_NAME,
             "version": VERSION,
-            "sim_time": w.clock.label,
-            "day": w.clock.day,
-            "hhmm": w.clock.hhmm,
-            "tick": w.tick_no,
-            "is_night": w.clock.is_night,
+            "sim_time": world.clock.label,
+            "day": world.clock.day,
+            "hhmm": world.clock.hhmm,
+            "tick": world.tick_no,
+            "is_night": world.clock.is_night,
             "paused": self.paused,
             "mock": config.MOCK_MODE,
             "seed": self.seed,
@@ -563,21 +563,21 @@ class Engine:
                  "home_of": v.get("home_of"), "radio": bool(v.get("radio")),
                  "vacant": bool(v.get("vacant")),
                  "sells_food": bool(v.get("sells_food"))}
-                for k, v in w.locations.items()
+                for k, v in world.locations.items()
             ],
-            "agents": [a.to_public() for a in w.agents.values()],
+            "agents": [a.to_public() for a in world.agents.values()],
             "projects": [
                 {"name": p["name"], "site": p["site"], "done": p["done"],
                  "work": p["work"], "complete": p["complete"],
                  "icon": p.get("icon"),
                  "contributors": p["contributors"]}
-                for p in w.projects
+                for p in world.projects
             ],
-            "events": [e for e in w.events if e["seq"] > since_seq][-120:],
+            "events": [e for e in world.events if e["seq"] > since_seq][-120:],
             "economy": ({
-                "tills": {k: round(v, 2) for k, v in w.tills.items()},
-                "debts": [d for d in w.debts if d["status"] == "open"][-20:],
-                "promises": [p for p in w.promises if p["status"] == "open"][-10:],
+                "tills": {k: round(v, 2) for k, v in world.tills.items()},
+                "debts": [d for d in world.debts if d["status"] == "open"][-20:],
+                "promises": [p for p in world.promises if p["status"] == "open"][-10:],
             } if getattr(config, "ECONOMY", False) else None),
         }
 

@@ -97,29 +97,30 @@ class MemoryStore:
     def retrieve(self, agent, query, now_tick, k=None):
         """Top-k memories by recency + importance + keyword relevance."""
         k = k or config.MEMORY_TOP_K
-        qtok = _tokens(query)
+        query_tokens = _tokens(query)
         with self._lock:
             rows = self._conn.execute(
                 "SELECT day, sim_time, kind, text, importance, tick FROM memories"
                 " WHERE agent=? AND world_id=? ORDER BY tick DESC LIMIT 400",
                 (agent, self.world_id),
             ).fetchall()
-        w = config.MEMORY_WEIGHTS
-        hl = config.MEMORY_RECENCY_HALFLIFE_TICKS
+        weights = config.MEMORY_WEIGHTS
+        halflife = config.MEMORY_RECENCY_HALFLIFE_TICKS
         scored = []
-        for day, sim_time, kind, text, imp, tick in rows:
+        for day, sim_time, kind, text, importance, tick in rows:
             age = max(0, now_tick - tick)
-            recency = math.pow(0.5, age / hl)
-            mtok = _tokens(text)
-            relevance = (len(qtok & mtok) / (len(qtok) + 1)) if qtok else 0.0
+            recency = math.pow(0.5, age / halflife)
+            memory_tokens = _tokens(text)
+            relevance = (len(query_tokens & memory_tokens)
+                         / (len(query_tokens) + 1)) if query_tokens else 0.0
             score = (
-                w["recency"] * recency
-                + w["importance"] * (imp / 10.0)
-                + w["relevance"] * relevance
+                weights["recency"] * recency
+                + weights["importance"] * (importance / 10.0)
+                + weights["relevance"] * relevance
             )
             scored.append((score, {
                 "day": day, "sim_time": sim_time, "kind": kind,
-                "text": text, "importance": imp, "tick": tick,
+                "text": text, "importance": importance, "tick": tick,
             }))
         scored.sort(key=lambda s: s[0], reverse=True)
         top = [m for _, m in scored[:k]]

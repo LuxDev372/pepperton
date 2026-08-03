@@ -32,12 +32,13 @@ class Director:
     def trigger(self, name=None):
         """Fire one chaos event (random weighted unless named). Returns a
         short description of what happened, for the API."""
-        w = dict(config.CHAOS["weights"])
+        event_weights = dict(config.CHAOS["weights"])
         if self.strangers_added >= config.CHAOS["max_strangers"]:
-            w.pop("stranger", None)
+            event_weights.pop("stranger", None)
         if name is None:
-            names = list(w)
-            name = self.rng.choices(names, weights=[w[n] for n in names])[0]
+            names = list(event_weights)
+            name = self.rng.choices(
+                names, weights=[event_weights[n] for n in names])[0]
         fn = getattr(self, f"_ev_{name}", None)
         if fn is None:
             return f"unknown event {name!r}"
@@ -57,7 +58,7 @@ class Director:
 
     # ------------------------------------------------------------- events
     def _ev_anonymous_text(self):
-        w = self.engine.world
+        world = self.engine.world
         target = self._random_agent()
         if not target:
             return "no one awake to text"
@@ -66,80 +67,80 @@ class Director:
             name=other.name.split()[0] if other else "someone")
         self._buzz(target, (f'Your phone buzzes — text from an UNKNOWN NUMBER: '
                             f'"{msg}" (there is no way to tell who sent this)'))
-        w.emit("world", None,
+        world.emit("world", None,
                f"(somewhere, a phone buzzes with a message from an unknown number)",
                target.location, deliver=False)
         return f"anonymous text to {target.name}: {msg}"
 
     def _ev_rumor_seed(self):
-        w = self.engine.world
+        world = self.engine.world
         target = self._random_agent()
         if not target:
             return "no one awake"
         other = self._random_agent(awake=False, exclude=target.name)
-        place = self.rng.choice(w.public_locations())
+        place = self.rng.choice(world.public_locations())
         rumor = self.rng.choice(config.RUMOR_SEEDS).format(
             name=other.name.split()[0] if other else "someone", place=place)
         self._buzz(target, rumor)
-        self.engine.memory.add(target.name, w.tick_no, w.clock.day, w.clock.hhmm,
+        self.engine.memory.add(target.name, world.tick_no, world.clock.day, world.clock.hhmm,
                                "rumor", rumor, 6)
         return f"rumor seeded in {target.name}: {rumor}"
 
     def _ev_windfall(self):
-        w = self.engine.world
+        world = self.engine.world
         target = self._random_agent()
         if not target:
             return "no one awake"
         amount = self.rng.choice([10, 15, 20])
         target.money += amount
-        w.emit("action", target.name,
+        world.emit("action", target.name,
                f"found ${amount} tucked in an old jacket pocket", target.location)
-        self.engine.memory.add(target.name, w.tick_no, w.clock.day, w.clock.hhmm,
+        self.engine.memory.add(target.name, world.tick_no, world.clock.day, world.clock.hhmm,
                                "event", f"I found ${amount} in an old jacket. Lucky day.", 6)
         return f"{target.name} found ${amount}"
 
     def _ev_duck_omen(self):
-        w = self.engine.world
+        world = self.engine.world
         line = self.rng.choice([
             "every single duck has vanished from the pond overnight",
             "the ducks at the pond are all facing the same direction, motionless",
             "there are twice as many ducks at the pond as yesterday. Nobody delivered ducks.",
         ])
-        w.emit("world", None, f"Word going around town: {line}.", "the park",
+        world.emit("world", None, f"Word going around town: {line}.", "the park",
                deliver=False)
-        for a in w.agents.values():
+        for a in world.agents.values():
             if not a.asleep:
                 self._buzz(a, f"Word going around town: {line}.")
         return f"duck omen: {line}"
 
     def _ev_group_leak(self):
-        w = self.engine.world
-        private = [e for e in w.events
+        world = self.engine.world
+        private = [e for e in world.events
                    if e["type"] == "text" and e.get("target")][-40:]
         if not private:
             return "no private texts to leak yet"
         leak = self.rng.choice(private)
-        w.emit("gossip", "Unknown Number",
+        world.emit("gossip", "Unknown Number",
                f'[forwarded private message] {leak["agent"]} → {leak["target"]}: '
                f'"{leak["text"]}"',
                "the plaza", deliver=False)
-        for a in w.agents.values():
+        for a in world.agents.values():
             self._buzz(a, (f'Your phone buzzes — {config.TOWN_NAME}_Gossip: an UNKNOWN NUMBER '
                            f'just forwarded a PRIVATE text to the whole town — '
                            f'{leak["agent"]} to {leak["target"]}: "{leak["text"]}"'))
         return f"leaked a private text from {leak['agent']} to the group"
 
     def _ev_dead_air(self):
-        w = self.engine.world
-        self.engine.radio.dead_day = w.clock.day
-        w.emit("world", None,
+        world = self.engine.world
+        self.engine.radio.dead_day = world.clock.day
+        world.emit("world", None,
                "The radio at Rosie's is nothing but static today.",
-               w.radio_location() or "the plaza", deliver=False)
+               world.radio_location() or "the plaza", deliver=False)
         return "radio is dead air today"
 
     def _ev_stranger(self):
-        w = self.engine.world
-        used_firsts = {a.name.split()[0] for a in w.agents.values()}
+        world = self.engine.world
+        used_firsts = {a.name.split()[0] for a in world.agents.values()}
         names = [n for n in config.STRANGER_NAMES if n not in used_firsts]
         if not names or self.strangers_added >= config.CHAOS["max_strangers"]:
             return "no stranger available"
@@ -158,21 +159,21 @@ class Director:
         a.location = "the plaza"
         a.money = self.rng.uniform(20, 60)
         # claim a vacant home if the town has built one
-        for lname, loc in w.locations.items():
+        for lname, loc in world.locations.items():
             if loc.get("vacant"):
                 loc["vacant"] = False
                 loc["home_of"] = a.name
                 a.home = lname
                 break
-        w.agents[a.name] = a
+        world.agents[a.name] = a
         self.engine.brains[a.name] = brains.build_brain(a, self.engine.seed)
         self.engine.memory.add(
-            a.name, w.tick_no, w.clock.day, w.clock.hhmm, "genesis",
+            a.name, world.tick_no, world.clock.day, world.clock.hhmm, "genesis",
             (f"I just arrived in {config.TOWN_NAME} by bus. I know no one here and no one "
              f"knows me. I have no place to stay yet. What matters: {a.goal}. "
              f"I should be careful how much I reveal."),
             9)
-        w.emit("world", None,
+        world.emit("world", None,
                f"A bus stops at the plaza. A stranger steps off, carrying one bag.",
                "the plaza")
         self.strangers_added += 1
