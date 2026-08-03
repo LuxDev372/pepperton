@@ -98,5 +98,6 @@ Memories belong to the CHARACTER, not the model. Two ways to swap actors:
    The villager keeps their name, memories, relationships, money, and
    diary — and wakes up with a different mind. The town is not told.
    Watch the transcript for the moment someone notices their neighbor
-   "hasn't been himself lately." (Live-mode tool; in mock mode the new
-   brain only takes over when you switch to `--live`.)
+   "hasn't been himself lately." (Takes effect immediately — even in a
+   mock-mode town, the recast villager starts using the live model if the
+   Ollama host is reachable; the mock understudy remains as fallback.)

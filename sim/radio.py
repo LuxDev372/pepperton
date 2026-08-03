@@ -59,8 +59,9 @@ def get_headlines():
 
 
 class Radio:
-    def __init__(self):
+    def __init__(self, seed=None):
         self._used = set()
+        self.rng = random.Random(f"radio:{seed}")
         self.dead_day = None    # set by the Director: static all day
 
     def bulletin(self, n=None):
@@ -108,7 +109,7 @@ class Radio:
                 world.emit("radio", None, h, loc, deliver=False)
             k = min(config.NEWS_ALERTS_PER_VILLAGER, len(pool))
             for agent in world.agents.values():
-                picks = random.sample(pool, k)
+                picks = self.rng.sample(pool, k)
                 for h in picks:
                     agent.pending.append({
                         "text": (f'Your phone buzzes — news alert: "{h}"'),

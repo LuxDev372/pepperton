@@ -76,7 +76,8 @@ class Clock:
 
 
 class World:
-    def __init__(self, cast):
+    def __init__(self, cast, world_id="legacy"):
+        self.world_id = world_id
         self.clock = Clock()
         self.tick_no = 0
         self.agents = {a.name: a for a in cast}
@@ -117,6 +118,7 @@ class World:
         """Record an event; queue it as a perception for co-located agents."""
         self._event_seq += 1
         ev = {
+            "wid": self.world_id,
             "seq": self._event_seq,
             "tick": self.tick_no,
             "day": self.clock.day,
@@ -333,7 +335,6 @@ class World:
                     self.emit("say", agent.name, text, agent.location, target=None)
                     return True, f"said (to no one in particular): {text}"
             self.emit("say", agent.name, text, agent.location, target=target)
-            agent.relationships.setdefault(target, 0)
             if target:
                 agent.relationships[target] = agent.relationships.get(target, 0) + 1
             return True, f"said: {text}"

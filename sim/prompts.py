@@ -103,6 +103,13 @@ def decision_prompt(agent, world, perceptions, memories):
     ) or "- nothing comes to mind"
     perc_lines = "\n".join(f"- {p['text']}" for p in perceptions) or "- nothing new"
     activity = (agent.activity or {}).get("type") or "nothing in particular"
+    rel_note = ""
+    rels = sorted(((n, c) for n, c in agent.relationships.items() if n),
+                  key=lambda kv: -kv[1])[:4]
+    if rels:
+        rel_note = ("\nPeople you have real history with (interactions/kindnesses): "
+                    + ", ".join(f"{n.split()[0]} {c}" for n, c in rels)
+                    + ". History matters — treat these people accordingly.")
     drink_note = ""
     recent = [t for t in agent.drink_ticks
               if world.tick_no - t <= config.TIPSY_TICKS]
@@ -128,7 +135,7 @@ def decision_prompt(agent, world, perceptions, memories):
     else:
         money_tag = ""
     return f"""It is {world.clock.label}. You are at {agent.location} ({world.locations[agent.location].get('desc', '')}).{drink_note}{night_note}
-Here with you: {people}.
+Here with you: {people}.{rel_note}
 Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.
 You were doing: {activity}.
 

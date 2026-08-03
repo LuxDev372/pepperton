@@ -20,8 +20,9 @@ def _tokens(text):
 
 
 class MemoryStore:
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, world_id="legacy"):
         self.path = db_path or config.DB_PATH
+        self.world_id = world_id
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.execute(
@@ -36,6 +37,12 @@ class MemoryStore:
                 importance REAL NOT NULL
             )"""
         )
+        # migration: world_id column separates incarnations of a town so a
+        # --fresh world can never inherit a dead cast's memories
+        cols = [r[1] for r in self._conn.execute("PRAGMA table_info(memories)")]
+        if "world_id" not in cols:
+            self._conn.execute(
+                "ALTER TABLE memories ADD COLUMN world_id TEXT DEFAULT 'legacy'")
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_agent ON memories(agent, tick)"
         )
@@ -44,18 +51,30 @@ class MemoryStore:
     def add(self, agent, tick, day, sim_time, kind, text, importance):
         with self._lock:
             self._conn.execute(
-                "INSERT INTO memories (agent, tick, day, sim_time, kind, text, importance)"
-                " VALUES (?,?,?,?,?,?,?)",
-                (agent, tick, day, sim_time, kind, text, float(importance)),
+                "INSERT INTO memories (agent, tick, day, sim_time, kind, text, importance, world_id)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (agent, tick, day, sim_time, kind, text, float(importance),
+                 self.world_id),
             )
             self._conn.commit()
+
+    def delete_after(self, tick):
+        """Reconcile after a crash-restore: memories from the abandoned
+        future timeline are removed so nobody remembers what never happened."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM memories WHERE world_id=? AND tick>?",
+                (self.world_id, int(tick)),
+            )
+            self._conn.commit()
+        return cur.rowcount
 
     def recent(self, agent, n=10):
         with self._lock:
             rows = self._conn.execute(
                 "SELECT day, sim_time, kind, text, importance, tick FROM memories"
-                " WHERE agent=? ORDER BY tick DESC, id DESC LIMIT ?",
-                (agent, n),
+                " WHERE agent=? AND world_id=? ORDER BY tick DESC, id DESC LIMIT ?",
+                (agent, self.world_id, n),
             ).fetchall()
         return [
             {"day": r[0], "sim_time": r[1], "kind": r[2], "text": r[3],
@@ -67,8 +86,8 @@ class MemoryStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT sim_time, kind, text, importance FROM memories"
-                " WHERE agent=? AND day=? ORDER BY tick, id",
-                (agent, day),
+                " WHERE agent=? AND day=? AND world_id=? ORDER BY tick, id",
+                (agent, day, self.world_id),
             ).fetchall()
         return [
             {"sim_time": r[0], "kind": r[1], "text": r[2], "importance": r[3]}
@@ -82,8 +101,8 @@ class MemoryStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT day, sim_time, kind, text, importance, tick FROM memories"
-                " WHERE agent=? ORDER BY tick DESC LIMIT 400",
-                (agent,),
+                " WHERE agent=? AND world_id=? ORDER BY tick DESC LIMIT 400",
+                (agent, self.world_id),
             ).fetchall()
         w = config.MEMORY_WEIGHTS
         hl = config.MEMORY_RECENCY_HALFLIFE_TICKS
@@ -110,6 +129,7 @@ class MemoryStore:
     def count(self, agent):
         with self._lock:
             (n,) = self._conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE agent=?", (agent,)
+                "SELECT COUNT(*) FROM memories WHERE agent=? AND world_id=?",
+                (agent, self.world_id),
             ).fetchone()
         return n

@@ -22,6 +22,21 @@ _IMPORTANCE = {
 
 STATE_PATH = "data/world_state.json"
 
+
+def _rng_dump(state):
+    """random.getstate() -> JSON-safe nested lists."""
+    def conv(x):
+        return [conv(i) for i in x] if isinstance(x, tuple) else x
+    return conv(state)
+
+
+def _rng_load(data):
+    """JSON nested lists -> setstate-compatible nested tuples."""
+    def conv(x):
+        return tuple(conv(i) for i in x) if isinstance(x, list) else x
+    return conv(data)
+
+
 def _read_version():
     import os
     for p in ("VERSION", os.path.join(os.path.dirname(__file__), "..", "VERSION")):
@@ -43,8 +58,11 @@ class Engine:
     def __init__(self, seed=None, state=None):
         if state:
             self.seed = state["seed"]
+            self.world_id = state.get("world_id", "legacy")
         else:
             self.seed = seed if seed is not None else random.randrange(1 << 30)
+            import uuid
+            self.world_id = uuid.uuid4().hex[:12]
         self.rng = random.Random(self.seed)
         if state:
             cast = []
@@ -60,10 +78,10 @@ class Engine:
                 cast.append(a)
         else:
             cast = generate_cast(self.seed)
-        self.world = World(cast)
-        self.memory = MemoryStore()
+        self.world = World(cast, world_id=self.world_id)
+        self.memory = MemoryStore(world_id=self.world_id)
         self.brains = {a.name: brains.build_brain(a, self.seed) for a in cast}
-        self.radio = Radio()
+        self.radio = Radio(self.seed)
         self.director = Director(self, self.seed)
         self.paused = False
         self.running = False
@@ -71,18 +89,29 @@ class Engine:
         self._reflected_day = 0
         if state:
             w = self.world
-            # backfill the event feed from the transcript so a resurrected
-            # town wakes up with its recent history visible, not amnesia
+            restored_tick = state["tick_no"]
+            # reconcile: erase any "memories from the future" written after
+            # the checkpoint we are restoring to (crash-recovery integrity)
+            dropped = self.memory.delete_after(restored_tick)
+            if dropped:
+                print(f"[ENGINE] reconciled {dropped} future memories "
+                      f"(post-tick-{restored_tick} timeline erased)", flush=True)
+            # backfill the event feed from the transcript (this world's
+            # lines only, and none from the abandoned future)
             try:
                 import json as _json
                 with open(config.TRANSCRIPT_JSONL, encoding="utf-8") as f:
-                    tail = f.readlines()[-150:]
+                    lines = f.readlines()
                 evs = []
-                for line in tail:
+                for line in lines:
                     try:
-                        evs.append(_json.loads(line))
+                        e = _json.loads(line)
                     except ValueError:
                         continue
+                    if e.get("wid", "legacy") == self.world_id and \
+                            e.get("tick", 0) <= restored_tick:
+                        evs.append(e)
+                evs = evs[-150:]
                 if evs:
                     w.events = evs
                     w._event_seq = max(e.get("seq", 0) for e in evs)
@@ -96,6 +125,28 @@ class Engine:
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
+            # deterministic resume: restore every RNG mid-stream
+            rs = state.get("rng", {})
+            try:
+                if rs.get("engine"):
+                    self.rng.setstate(_rng_load(rs["engine"]))
+                if rs.get("director"):
+                    self.director.rng.setstate(_rng_load(rs["director"]))
+                if rs.get("radio") and getattr(self.radio, "rng", None):
+                    self.radio.rng.setstate(_rng_load(rs["radio"]))
+                for name, st_ in (rs.get("brains") or {}).items():
+                    b = self.brains.get(name)
+                    mb = getattr(b, "understudy", None)
+                    if mb is not None and not hasattr(mb, "rng"):
+                        mb = getattr(mb, "understudy", None)
+                    if mb is not None and hasattr(mb, "rng"):
+                        mb.rng.setstate(_rng_load(st_))
+            except (TypeError, ValueError) as e:
+                print(f"[ENGINE] RNG restore skipped: {e}", flush=True)
+            # scrub ghost relationships (pre-1.17 None-key bug)
+            for a in self.world.agents.values():
+                a.relationships.pop(None, None)
+                a.relationships.pop("null", None)
             w.emit("world", None,
                    f"{config.TOWN_NAME} continues. (Day {w.clock.day} — the town "
                    f"survived an upgrade; nobody noticed a thing.)",
@@ -119,8 +170,23 @@ class Engine:
             af = {f: getattr(a, f) for f in _AGENT_FIELDS}
             af["recent_own_says"] = [sorted(x) for x in a.recent_own_says]
             agents[a.name] = af
+        brains_rng = {}
+        for name, b in self.brains.items():
+            mb = getattr(b, "understudy", None)
+            if mb is not None and not hasattr(mb, "rng"):
+                mb = getattr(mb, "understudy", None)
+            if mb is not None and hasattr(mb, "rng"):
+                brains_rng[name] = _rng_dump(mb.rng.getstate())
         state = {
             "seed": self.seed,
+            "world_id": self.world_id,
+            "rng": {
+                "engine": _rng_dump(self.rng.getstate()),
+                "director": _rng_dump(self.director.rng.getstate()),
+                "radio": (_rng_dump(self.radio.rng.getstate())
+                          if getattr(self.radio, "rng", None) else None),
+                "brains": brains_rng,
+            },
             "tick_no": self.world.tick_no,
             "day": self.world.clock.day,
             "minutes": self.world.clock.minutes,
@@ -326,6 +392,10 @@ class Engine:
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
         for agent in order:
+            act = agent.activity
+            if act and act.get("until_tick") is not None and \
+                    self.world.tick_no >= act["until_tick"]:
+                agent.activity = None   # shifts END: no wages/labor past the bell
             self._apply_needs(agent)
             self._maybe_wake(agent)
             if not self._needs_decision(agent):
