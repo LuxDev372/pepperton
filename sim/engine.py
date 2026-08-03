@@ -98,6 +98,9 @@ class Engine:
         self.paused = False
         self.running = False
         self.lock = threading.RLock()   # guards world/brains vs API threads
+        self._cmdq = []                 # API writes, applied between ticks
+        self._cmdlock = threading.Lock()   # guards _cmdq only — never held
+                                           # while a model is thinking
         self._thread = None
         self._reflected_day = 0
         self._cached_snapshot = None    # rebuilt at the end of every tick
@@ -552,6 +555,33 @@ class Engine:
         for _ in range(ticks):
             self.step()
 
+    # ----------------------------------------------------------- commands
+    def submit(self, fn, label=""):
+        """Queue a world mutation to run at the next tick boundary.
+
+        API threads must not take engine.lock themselves: in live mode a
+        tick holds it while five models think, so a Director click could
+        block an HTTP request for the full model timeout (measured at 107s
+        on a busy GPU). Writes are queued and applied between ticks — the
+        same contract possession already uses for queued actions."""
+        with self._cmdlock:
+            self._cmdq.append((fn, label))
+
+    def _drain_commands(self):
+        import traceback
+        with self._cmdlock:
+            pending, self._cmdq = self._cmdq, []
+        if not pending:
+            return
+        with self.lock:
+            for fn, label in pending:
+                try:
+                    fn()
+                except Exception:
+                    print(f"[ENGINE] queued command {label!r} failed "
+                          f"(town continues):", flush=True)
+                    traceback.print_exc()
+
     def start_background(self):
         self.running = True
 
@@ -573,6 +603,9 @@ class Engine:
                             self.save_state()
                         except Exception:
                             pass
+                # between ticks the lock is free — apply anything the
+                # observatory asked for while the town was thinking.
+                self._drain_commands()
                 time.sleep(pace)
 
         self._thread = threading.Thread(target=loop, daemon=True, name="pepperton-engine")
@@ -642,14 +675,20 @@ class Engine:
         inspector panel, wait briefly, then serve the last full chart we
         built (marked stale). The fresh one arrives when the tick clears."""
         if not self.lock.acquire(timeout=2.0):
+            # Whatever else is stale, the seat is not: possession lives on
+            # the brain wrapper, is set without the engine lock, and a
+            # stale `possessed` would make the observatory's seat control
+            # flip back under the operator's hands.
+            b = self.brains.get(name)
+            seat = {"possessed": bool(b and b.possessed)}
             cached = self._inspect_cache.get(name)
             if cached is not None:
-                return {**cached, "stale": True}
+                return {**cached, **seat, "stale": True}
             snap = self._cached_snapshot
             if snap:
                 for a in snap["agents"]:
                     if a["name"] == name:
-                        return {**a, "stale": True,
+                        return {**a, **seat, "stale": True,
                                 "last_reason": "(mid-thought — full chart "
                                                "when the tick clears)"}
             return None
