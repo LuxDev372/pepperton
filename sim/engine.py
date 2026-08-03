@@ -22,6 +22,17 @@ _IMPORTANCE = {
 
 STATE_PATH = "data/world_state.json"
 
+def _read_version():
+    import os
+    for p in ("VERSION", os.path.join(os.path.dirname(__file__), "..", "VERSION")):
+        try:
+            return open(p).read().strip()
+        except OSError:
+            continue
+    return "dev"
+
+VERSION = _read_version()
+
 _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "location", "money", "pantry", "needs", "asleep", "activity",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
@@ -387,6 +398,7 @@ class Engine:
         w = self.world
         return {
             "town": config.TOWN_NAME,
+            "version": VERSION,
             "sim_time": w.clock.label,
             "day": w.clock.day,
             "hhmm": w.clock.hhmm,

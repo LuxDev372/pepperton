@@ -593,7 +593,7 @@ function updateHeader(snap) {
   const mb = $("modebadge");
   mb.textContent = snap.mock ? "mock" : "live";
   mb.className = "badge " + (snap.mock ? "mock" : "live");
-  $("seedbadge").textContent = "seed " + (snap.seed == null ? "—" : snap.seed);
+  $("seedbadge").textContent = "seed " + (snap.seed == null ? "—" : snap.seed) + (snap.version ? " · v" + snap.version : "");
   const pb = $("pauseBtn");
   pb.textContent = snap.paused ? "Resume" : "Pause";
   pb.className = snap.paused ? "paused" : "";
