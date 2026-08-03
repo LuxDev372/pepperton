@@ -326,6 +326,44 @@ def _economy():
 
 _economy()
 _inn_and_taxes()
+
+# ---- appended by v2.2: the Poor Box ----
+def _poor_box():
+    fresh_data()
+    e = Engine(seed=51)
+    w = e.world
+    ags = list(w.agents.values())
+    rich, broke = ags[0], ags[1]
+    box = config.POOR_BOX
+
+    # donations land in the jar, publicly, from anywhere
+    rich.money = 50
+    ok, msg = w.execute(rich, {"action": "pay", "to": "the poor box",
+                               "amount": 12})
+    check("donations fill the poor box", ok and w.tills[box] == 12.0 and
+          rich.money == 38, msg[:50])
+
+    # a broke villager at the diner eats ON the box: jar pays the diner
+    broke.money = 2
+    broke.location = "Rosie's Diner"
+    broke.needs["fullness"] = 30
+    diner0 = w.tills["Rosie's Diner"]
+    full0 = broke.needs["fullness"]
+    ok, msg = w.execute(broke, {"action": "eat"})
+    check("the box buys meals for the broke",
+          ok and broke.money == 2 and w.tills[box] == 12.0 - config.MEAL_COST
+          and w.tills["Rosie's Diner"] == diner0 + config.MEAL_COST
+          and broke.needs["fullness"] > full0,
+          msg[:60])
+
+    # empty jar: the old cold reality returns
+    w.tills[box] = 0.0
+    broke.needs["fullness"] = 30
+    ok, msg = w.execute(broke, {"action": "eat"})
+    check("an empty box feeds no one", not ok, msg[:50])
+    fresh_data()
+
+_poor_box()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

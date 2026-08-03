@@ -198,6 +198,13 @@ class MockBrain(BrainBase):
                     return ({"action": "pay", "to": d["creditor"],
                              "amount": d["amount"]},
                             "", "mock: settling a debt")
+            # the comfortable drop a five in the jar now and then
+            box = getattr(config, "POOR_BOX", "the poor box")
+            if box in world.tills and agent.money > 40 and \
+                    world.locations.get(agent.location, {}).get("sells_food") and \
+                    self.rng.random() < 0.08:
+                return ({"action": "pay", "to": "the poor box", "amount": 5},
+                        "", "mock: feeding the jar")
             # broke and at the bank: ask the teller
             bank = world.bank_name()
             if bank and agent.location == bank and \

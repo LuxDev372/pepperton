@@ -491,6 +491,24 @@ class World:
         loc = self.locations.get(agent.location, {})
         if loc.get("sells_food"):
             if agent.money < config.MEAL_COST:
+                # the poor box: charity mediated through commerce — the jar
+                # pays the diner, the diner feeds the villager, the town sees
+                box = getattr(config, "POOR_BOX", "the poor box")
+                if getattr(config, "POOR_BOX_ENABLED", True) and \
+                        self.tills.get(box, 0.0) >= config.MEAL_COST:
+                    self.tills[box] = round(
+                        self.tills[box] - config.MEAL_COST, 2)
+                    self._till_deposit(agent.location, config.MEAL_COST)
+                    agent.needs["fullness"] = min(
+                        100, agent.needs["fullness"] + config.MEAL_FULLNESS)
+                    agent.activity = {"type": "idle",
+                                      "until_tick": self.tick_no + 2,
+                                      "note": "digesting"}
+                    self.emit("action", agent.name,
+                              "had a meal on the poor box — the jar on the "
+                              "counter is lighter", agent.location)
+                    return True, (f"ate at {agent.location} on the poor box "
+                                  f"(jar now ${self.tills.get(box, 0):.0f})")
                 hungry_note = (" — visibly hungry" if
                                agent.needs["fullness"] <= config.NEEDS["fullness"]["urgent_below"]
                                else "")
@@ -679,6 +697,20 @@ class World:
             return False, (f"tried to pay ${amount:.0f} but only has "
                            f"${agent.money:.0f}")
         to_raw = str(action.get("to") or "").strip().lower()
+        # the poor box takes donations from anyone, owed or not — and
+        # giving is PUBLIC (this town competes at legible virtue)
+        if getattr(config, "POOR_BOX_ENABLED", True) and \
+                any(w in to_raw for w in ("box", "charity", "donat", "poor")):
+            box = getattr(config, "POOR_BOX", "the poor box")
+            if box not in self.tills:
+                return False, "there's no poor box in this town"
+            agent.money -= amount
+            self.ledger.deposit(box, amount)
+            self.emit("action", agent.name,
+                      f"dropped ${amount:.0f} in the poor box on the "
+                      f"diner counter", agent.location)
+            return True, (f"gave ${amount:.0f} to the poor box "
+                          f"(the jar holds ${self.tills.get(box, 0):.0f})")
         bank = self.bank_name()
         inst = None
         if "bank" in to_raw:

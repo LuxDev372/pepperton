@@ -159,6 +159,14 @@ INN_ROOM_COST = 5           # a bed, cheaper than the Tap's $8 gouge
 # encourage," as the town's founding courier put it.
 INCOME_TAX = 0.15
 
+# The Poor Box (v2.2): a jar on the diner counter. Anyone can drop money
+# in (pay action, to "the poor box" — a PUBLIC act; this town competes at
+# legible virtue). When a broke villager tries to eat at the diner, the
+# box pays for their meal — the diner still gets its money, the town sees
+# who eats on charity, and nobody starves while the jar is full.
+POOR_BOX = "the poor box"
+POOR_BOX_ENABLED = True
+
 # Overheard (untargeted) speech no longer interrupts everyone in the room —
 # it's still perceived, but only being directly addressed demands a response.
 # This is the main brake on runaway talk-chains.

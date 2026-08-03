@@ -32,6 +32,9 @@ class Ledger:
                 elif loc.get("sells_food") or loc.get("bar"):
                     self.tills[name] = float(config.TILL_SEED)
             self.tills[config.TOWN_FUND] = float(config.TOWN_FUND_SEED)
+            # the poor box starts EMPTY — charity is earned, not seeded
+            if getattr(config, "POOR_BOX_ENABLED", True):
+                self.tills[getattr(config, "POOR_BOX", "the poor box")] = 0.0
         self.debts = []      # {"id","debtor","creditor","amount","reason","day","due_day","status"}
         self.promises = []   # {"id","maker","to","text","day","due_day","status"}
         self.seq = 0             # shared id counter for debts and promises

@@ -48,7 +48,11 @@ def _econ_line():
             f"ledger too — keep your word (the pay action) or the whole town "
             f"learns what your word is worth. The town takes "
             f"{int(getattr(config, 'INCOME_TAX', 0.15) * 100)}% of every "
-            f"wage for the town fund — the price of civilization.")
+            f"wage for the town fund — the price of civilization."
+            + ("  A poor box sits on the diner counter: drop money in "
+               "(pay action, to 'the poor box') and it quietly buys "
+               "meals for neighbors who can't pay."
+               if getattr(config, "POOR_BOX_ENABLED", True) else ""))
 
 
 def system_prompt(agent, world):
@@ -160,6 +164,11 @@ def decision_prompt(agent, world, perceptions, memories):
     wp = agent.workplace()
     bank = world.bank_name() if hasattr(world, "bank_name") else None
     if agent.money < config.MEAL_COST:
+        box = getattr(config, "POOR_BOX", "the poor box")
+        box_bal = world.tills.get(box, 0.0) if hasattr(world, "tills") else 0.0
+        box_bit = (f" The poor box at the diner holds ${box_bal:.0f} — a meal "
+                   f"is there for whoever needs it (just eat at the diner)."
+                   if box_bal >= config.MEAL_COST else "")
         bank_bit = ""
         if bank and getattr(config, "ECONOMY", False):
             tier, limit, _ = world.credit_report(agent)
@@ -168,7 +177,7 @@ def decision_prompt(agent, world, perceptions, memories):
                             f"your record (borrow action, at the bank) — but "
                             f"loans come due, with interest.")
         money_tag = (f" (BROKE. Building pays NOTHING — it's volunteer work. "
-                     f"{'Your job at ' + wp + ' PAYS real wages; go work a shift.' if wp else 'You need paid work or someone generous.'}{bank_bit})")
+                     f"{'Your job at ' + wp + ' PAYS real wages; go work a shift.' if wp else 'You need paid work or someone generous.'}{bank_bit}{box_bit})")
     elif agent.money < 3 * config.MEAL_COST:
         money_tag = (" (running low — remember building is unpaid; "
                      + (f"your job at {wp} is what pays" if wp else "paid work is what pays") + ")")
