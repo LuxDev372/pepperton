@@ -86,6 +86,42 @@ check("resume is deterministic (money)", moneyA == moneyB,
       "" if moneyA == moneyB else f"A={moneyA} B={moneyB}")
 
 fresh_data()
-fails = [r for r in results if not r[1]]
-print(f"\n{len(results) - len(fails)}/{len(results)} passed")
-sys.exit(1 if fails else 0)
+
+# ---- appended by v1.18: Warmth & Closure regression ----
+def _extra():
+    fresh_data()
+    e = Engine(seed=21)
+    ags = list(e.world.agents.values())
+    a, b = ags[0], ags[1]
+    # bidirectional gratitude on a treat
+    a.location = b.location = "Rosie's Diner"; a.money = 40
+    b.needs["fullness"] = 40
+    e.world.execute(a, {"action": "treat"})
+    both = a.relationships.get(b.name, 0) > 0 and b.relationships.get(a.name, 0) > 0
+    check("gratitude flows both directions", both,
+          f"giver->recv {a.relationships.get(b.name)}, recv->giver {b.relationships.get(a.name)}")
+    # valence + goal arc via a scripted reflection envelope
+    old_goal = a.goal
+    class FakeBrain:
+        def reflect(self, agent, day, day_memories):
+            return {"reflection": "Test diary.", "warmer": b.name,
+                    "colder": None, "goal_resolved": True}
+    e.brains[a.name] = FakeBrain()
+    class NullBrain:
+        def reflect(self, agent, day, day_memories):
+            return {"reflection": "quiet day", "warmer": None,
+                    "colder": None, "goal_resolved": False}
+    for other in ags[1:]:
+        e.brains[other.name] = NullBrain()
+    before = a.relationships.get(b.name, 0)
+    e._nightly_reflections()
+    check("nightly warmth applies (+3)", a.relationships.get(b.name, 0) == before + 3,
+          f"{before} -> {a.relationships.get(b.name, 0)}")
+    check("goal arc resolves and rerolls", a.goal != old_goal,
+          f"'{old_goal[:30]}...' -> '{a.goal[:30]}...'")
+    fresh_data()
+
+_extra()
+fails2 = [r for r in results if not r[1]]
+print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
+sys.exit(1 if fails2 else 0)

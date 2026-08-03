@@ -543,6 +543,7 @@ class World:
                     "sim_time": self.clock.hhmm,
                 })
                 agent.relationships[t2.name] = agent.relationships.get(t2.name, 0) + 2
+                t2.relationships[agent.name] = t2.relationships.get(agent.name, 0) + 2
             self.emit("action", agent.name,
                       f"bought a meal for {', '.join(names)} (-${cost})",
                       agent.location)

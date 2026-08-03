@@ -104,12 +104,17 @@ def decision_prompt(agent, world, perceptions, memories):
     perc_lines = "\n".join(f"- {p['text']}" for p in perceptions) or "- nothing new"
     activity = (agent.activity or {}).get("type") or "nothing in particular"
     rel_note = ""
-    rels = sorted(((n, c) for n, c in agent.relationships.items() if n),
-                  key=lambda kv: -kv[1])[:4]
+    rels = sorted(((n, c) for n, c in agent.relationships.items() if n and c != 0),
+                  key=lambda kv: -abs(kv[1]))[:4]
     if rels:
-        rel_note = ("\nPeople you have real history with (interactions/kindnesses): "
-                    + ", ".join(f"{n.split()[0]} {c}" for n, c in rels)
-                    + ". History matters — treat these people accordingly.")
+        def _tag(v):
+            if v >= 5: return "warm"
+            if v > 0: return "friendly"
+            if v <= -5: return "bad blood"
+            return "sore"
+        rel_note = ("\nWhere you stand with people (your own judgment, built from history): "
+                    + ", ".join(f"{n.split()[0]} {c:+d} ({_tag(c)})" for n, c in rels)
+                    + ". Let it show — warmth to friends, edge to those who earned it.")
     drink_note = ""
     recent = [t for t in agent.drink_ticks
               if world.tick_no - t <= config.TIPSY_TICKS]
@@ -158,7 +163,12 @@ def reflection_prompt(agent, day, day_memories):
     return f"""You are {agent.name}, the {config.TOWN_NAME} {agent.job}. The day is over. Here is what happened to you on day {day}:
 {lines}
 
-In 2-3 sentences, in first person, reflect on the day: what mattered, how you feel about the people you dealt with, and what you intend to do about it tomorrow. Respond with ONLY a JSON object: {{"reflection": "<your 2-3 sentences>"}}"""
+In 2-3 sentences, in first person, reflect on the day: what mattered, how you feel about the people you dealt with, and what you intend to do about it tomorrow.
+Respond with ONLY this JSON object (null is fine for any field you have no answer for):
+{{"reflection": "<your 2-3 sentences>",
+  "warmer": "<first name of ONE person who rose in your regard today, or null>",
+  "colder": "<first name of ONE person who fell in your regard today, or null>",
+  "goal_resolved": <true ONLY if your current preoccupation finally feels settled or finished, else false>}}"""
 
 
 def parse_json_reply(raw):

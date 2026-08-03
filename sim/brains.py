@@ -75,6 +75,9 @@ class OllamaBrain(BrainBase):
         return action, raw, "model decision"
 
     def reflect(self, agent, day, day_memories):
+        fallback = {"reflection": f"Another day. {agent.goal.capitalize()} — "
+                                  f"still working on it.",
+                    "warmer": None, "colder": None, "goal_resolved": False}
         try:
             raw = self._chat(
                 f"You are {agent.name}. Answer only with JSON.",
@@ -82,10 +85,16 @@ class OllamaBrain(BrainBase):
             )
             parsed = prompts.parse_json_reply(raw)
             if parsed and parsed.get("reflection"):
-                return str(parsed["reflection"])
+                return {
+                    "reflection": str(parsed["reflection"]),
+                    "warmer": parsed.get("warmer") or None,
+                    "colder": parsed.get("colder") or None,
+                    "goal_resolved": str(parsed.get("goal_resolved")).lower()
+                                     in ("true", "1", "yes"),
+                }
         except requests.RequestException:
             pass
-        return f"Another day in Pepperton. {agent.goal.capitalize()} — still working on it."
+        return fallback
 
 
 # ------------------------------------------------------------------ Mock
@@ -199,8 +208,15 @@ class MockBrain(BrainBase):
 
     def reflect(self, agent, day, day_memories):
         n_talks = sum(1 for m in day_memories if m["kind"] == "speech")
-        return (f"Day {day} done. Talked {n_talks} times, and I'm no closer on this: "
-                f"{agent.goal}. Tomorrow I do something about it.")
+        contacts = [n for n in agent.relationships if n]
+        warmer = self.rng.choice(contacts) if contacts and self.rng.random() < 0.3 else None
+        return {
+            "reflection": (f"Day {day} done. Talked {n_talks} times, and I'm no "
+                           f"closer on this: {agent.goal}. Tomorrow I do something "
+                           f"about it."),
+            "warmer": warmer, "colder": None,
+            "goal_resolved": self.rng.random() < 0.12,
+        }
 
 
 # -------------------------------------------------------------- External

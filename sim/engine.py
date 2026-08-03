@@ -420,16 +420,43 @@ class Engine:
             imp = _IMPORTANCE["own_speech"] if kind == "speech" else _IMPORTANCE["own_action"]
             self._remember(agent, kind, f"I {summary}", imp if ok else imp + 1)
 
-        # nightly reflection
+        # nightly reflection: diary + self-judged warmth + goal arcs
         if self.world.clock.at(config.REFLECTION_TIME) and \
                 self._reflected_day < self.world.clock.day:
             self._reflected_day = self.world.clock.day
-            for agent in self.world.agents.values():
-                agent.pantry = 3    # overnight restock
-                day_mem = self.memory.day_memories(agent.name, self.world.clock.day)
-                text = self.brains[agent.name].reflect(agent, self.world.clock.day, day_mem)
-                self._remember(agent, "reflection", text, _IMPORTANCE["reflection"])
-                self.world.emit("reflect", agent.name, text, agent.location, deliver=False)
+            self._nightly_reflections()
+
+    def _nightly_reflections(self):
+        for agent in self.world.agents.values():
+            agent.pantry = 3    # overnight restock
+            day_mem = self.memory.day_memories(agent.name, self.world.clock.day)
+            r = self.brains[agent.name].reflect(agent, self.world.clock.day, day_mem)
+            if isinstance(r, str):   # legacy brain
+                r = {"reflection": r, "warmer": None, "colder": None,
+                     "goal_resolved": False}
+            self._remember(agent, "reflection", r["reflection"],
+                           _IMPORTANCE["reflection"])
+            self.world.emit("reflect", agent.name, r["reflection"],
+                            agent.location, deliver=False)
+            # valence: the villager's own nightly judgment moves the needle
+            for key, delta in (("warmer", 3), ("colder", -3)):
+                who = self.world._resolve_agent(r.get(key))
+                if who and who != agent.name:
+                    agent.relationships[who] = \
+                        agent.relationships.get(who, 0) + delta
+            # goal arcs: closure, then a fresh preoccupation
+            if r.get("goal_resolved"):
+                old = agent.goal
+                pool = [g for g in config.GOALS if g != old]
+                agent.goal = self.rng.choice(pool)
+                self._remember(agent, "event",
+                               f"Settled at last: {old}. Done with it. A new "
+                               f"preoccupation takes root: {agent.goal}",
+                               _IMPORTANCE["reflection"])
+                self.world.emit("reflect", agent.name,
+                                f"(a chapter closes: no longer '{old}' — "
+                                f"now: '{agent.goal}')",
+                                agent.location, deliver=False)
 
     # --------------------------------------------------------------- run
     def run_headless(self, ticks):
