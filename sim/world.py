@@ -193,12 +193,27 @@ class World:
                           f"kept their word to {payee_name}", payer.location,
                           deliver=False)
 
+    # Gratitude idioms — "I owe you one", "I owe you a beer" — are warmth,
+    # not contracts. The ledger only wants MONEY promises. (Statute passed
+    # after Sam Fletcher was booked twice in one day for saying thank you.)
+    _PROMISE_IDIOMS = ("owe you one", "owe you a ", "owe you big")
+    _MONEY_WORDS = ("$", "pay you back", "pay you", "money", "dollar",
+                    "buck", "cash", "settle up")
+
+    def _is_money_promise(self, norm):
+        if not any(p in norm for p in config.PROMISE_PATTERNS):
+            return False
+        if any(idiom in norm for idiom in self._PROMISE_IDIOMS) and \
+                not any(m in norm for m in self._MONEY_WORDS):
+            return False
+        return True
+
     def _detect_promise(self, agent, target, norm, text):
         """Speech that creates obligation: the world writes payment promises
         down, and the deadline passing in silence becomes public character."""
         if not getattr(config, "ECONOMY", False) or not target:
             return
-        if not any(p in norm for p in config.PROMISE_PATTERNS):
+        if not self._is_money_promise(norm):
             return
         for pr in self.promises:
             if pr["status"] == "open" and pr["maker"] == agent.name and \
@@ -339,6 +354,11 @@ class World:
         # promise deadlines: silence past the due day is a public verdict
         for pr in self.promises:
             if pr["status"] == "open" and day > pr["due_day"]:
+                # grandfather clause: anything recorded under an older, looser
+                # statute that wouldn't qualify today lapses without verdict
+                if not self._is_money_promise(pr["text"].lower()):
+                    pr["status"] = "lapsed"
+                    continue
                 pr["status"] = "broken"
                 maker = self.agents.get(pr["maker"])
                 to = self.agents.get(pr["to"])

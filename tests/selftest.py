@@ -202,6 +202,34 @@ def _economy():
     check("silence breaks a promise", len(broken) == 1,
           f"{len(broken)} broken")
 
+    # the Sam Fletcher Amendment: gratitude idioms are not contracts
+    n_before = len(w.promises)
+    w.execute(a, {"action": "say", "text": "Thanks for that! I owe you one.",
+                  "to": b.name}) if b.location == a.location else None
+    b.location = a.location
+    w.execute(a, {"action": "say", "text": "Really — I owe you one, friend.",
+                  "to": b.name})
+    check("'I owe you one' is not a contract", len(w.promises) == n_before,
+          f"{len(w.promises) - n_before} bogus promises recorded")
+    # ...but an idiom WITH money attached still counts
+    w.execute(a, {"action": "say",
+                  "text": "I owe you one — twenty bucks, and I'll pay you back Friday.",
+                  "to": b.name})
+    check("money promises still register",
+          len(w.promises) == n_before + 1, "")
+    # grandfather clause: a pre-amendment idiom promise lapses, no verdict
+    w.promises.append({"id": 99, "maker": a.name, "to": b.name,
+                       "text": "Thanks, I owe you one!", "day": w.clock.day,
+                       "due_day": w.clock.day - 1, "status": "open"})
+    rel_before = w.agents[b.name].relationships.get(a.name, 0)
+    w._ledger_day_done = 0
+    w.morning_ledger()
+    g = next(p for p in w.promises if p["id"] == 99)
+    check("old idiom promises lapse without verdict",
+          g["status"] == "lapsed" and
+          w.agents[b.name].relationships.get(a.name, 0) == rel_before,
+          f"status={g['status']}")
+
     # the bank: thin credit is capped, loans move real money, ledger records
     fresh_data()
     e = Engine(seed=33); w = e.world
