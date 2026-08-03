@@ -220,6 +220,64 @@
   }
 .ev.text { color: #7fd4c1; }
 .ev.gossip { color: #d8a5c8; font-weight: 500; }
+
+/* ---------------- control panel ---------------- */
+.ctlbtn {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+}
+.ctlbtn:hover { border-color: var(--accent); color: var(--accent); }
+.ctlbtn.on { border-color: var(--accent); color: var(--accent); }
+.ctlbtn:disabled { opacity: .45; cursor: default; }
+.ctlbtn:disabled:hover { border-color: var(--line); color: var(--ink); }
+
+#director {
+  position: absolute; top: 52px; right: 18px; z-index: 40; width: 268px;
+  background: #161a22; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; display: none; box-shadow: 0 12px 34px rgba(0,0,0,.5);
+}
+#director.open { display: block; }
+#director .sect:first-child { margin-top: 0; }
+#director .prow { display: flex; gap: 6px; align-items: center; }
+#director .prow + .prow { margin-top: 6px; }
+#director select {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px;
+  flex: 1; min-width: 0;          /* without this, flex refuses to shrink
+                                     the select and it overflows the panel */
+}
+#director select:focus { outline: none; border-color: var(--accent); }
+.chaosgrid { display: flex; flex-wrap: wrap; gap: 5px; }
+.chaosgrid button {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--ink-dim);
+  font: inherit; font-size: 11px; padding: 4px 9px; border-radius: 8px; cursor: pointer;
+}
+.chaosgrid button:hover { color: var(--accent); border-color: #574327; }
+.note { font-size: 11px; color: var(--ink-dimmer); margin-top: 8px; line-height: 1.5; }
+.note.warn { color: var(--danger); }
+
+/* possession composer — lives OUTSIDE #inspbody so the 2s refresh
+   never wipes what you are in the middle of typing */
+#possess {
+  flex: 0 0 auto; border-bottom: 1px solid var(--line);
+  padding: 10px 14px; background: #12161d;
+}
+#possess .prow { display: flex; align-items: center; gap: 8px; }
+#possess .prow + .prow { margin-top: 8px; }
+#possess .seatlabel { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-dimmer); }
+#possess .seatlabel.on { color: var(--danger); }
+#composer { display: none; }
+#composer.open { display: block; }
+#possess select, #possess input {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px; min-width: 0;
+}
+#possess input { flex: 1; }
+#possess input::placeholder { color: var(--ink-dimmer); }
+#possess select:focus, #possess input:focus { outline: none; border-color: var(--accent); }
+#actResult { font-size: 11px; color: var(--ink-dimmer); margin-top: 7px; min-height: 14px; }
+#actResult.ok { color: var(--teal); }
+#actResult.err { color: var(--danger); }
 </style>
 </head>
 <body>
@@ -232,8 +290,25 @@
   <span id="seedbadge" class="badge">seed —</span>
   <span id="conn" class="badge">offline</span>
   <span class="spacer"></span>
+  <button id="dirBtn" class="ctlbtn">🎬 Director</button>
   <button id="pauseBtn">Pause</button>
 </header>
+
+<div id="director">
+  <div class="sect">Roll an event</div>
+  <div class="chaosgrid" id="chaosGrid"></div>
+  <div class="sect">Recast a villager</div>
+  <div class="prow">
+    <select id="recastWho"></select>
+  </div>
+  <div class="prow">
+    <select id="recastModel"></select>
+    <button class="ctlbtn" id="recastGo" style="padding:5px 10px;font-size:12px">Swap</button>
+  </div>
+  <div class="note">A transplant keeps their memories, money and
+    relationships — only the mind changes.</div>
+  <div id="dirResult" class="note"></div>
+</div>
 
 <main>
   <div id="mapwrap">
@@ -251,6 +326,25 @@
         <h2 id="inspName">—</h2>
         <span id="inspJob" style="color:var(--ink-dim);font-size:13px"></span>
         <button id="inspClose" title="Close">✕</button>
+      </div>
+      <div id="possess">
+        <div class="prow">
+          <span class="seatlabel" id="seatLabel">the seat is empty</span>
+          <span style="flex:1"></span>
+          <button class="ctlbtn" id="seatBtn" style="padding:4px 12px;font-size:12px">Take the seat</button>
+        </div>
+        <div id="composer">
+          <div class="prow">
+            <select id="verb"></select>
+            <input id="argText" placeholder="what you say" />
+          </div>
+          <div class="prow" id="row2">
+            <select id="argTo" style="flex:1"></select>
+            <input id="argNum" type="number" placeholder="amount" style="max-width:96px;display:none" />
+            <button class="ctlbtn" id="actGo" style="padding:5px 14px;font-size:12px">Do it</button>
+          </div>
+          <div id="actResult"></div>
+        </div>
       </div>
       <div id="inspbody"></div>
     </div>
@@ -630,6 +724,12 @@ function openInspector(name) {
   $("inspJob").textContent = "";
   $("inspbody").innerHTML = '<div class="kv">loading…</div>';
   $("inspector").className = "open";
+  $("argText").value = "";
+  $("argNum").value = "";
+  $("actResult").textContent = "";
+  $("actResult").className = "";
+  updateSeat(false);
+  syncComposerFields();
   fetchInspector();
   state.insp.timer = setInterval(fetchInspector, 2000);
 }
@@ -651,6 +751,7 @@ async function fetchInspector() {
   } catch (e) { return; }
   if (!state.insp.open || state.insp.name !== name) return;
   renderInspector(d);
+  updateSeatFromPoll(!!d.possessed);
 }
 
 function needBar(label, val, color) {
@@ -1119,10 +1220,218 @@ canvas.addEventListener("mousemove", (e) => {
 });
 
 /* =====================================================================
+   CONTROL PANEL — possession, the Director, brain transplants
+
+   The composer deliberately lives outside #inspbody: the inspector
+   rewrites its own innerHTML every two seconds, which would otherwise
+   eat whatever you were halfway through typing.
+===================================================================== */
+
+/* verb -> which inputs it wants. to: "person" | "person+all" | "place" |
+   "payee" | null.  text: placeholder or null.  num: true when it costs. */
+const VERBS = {
+  say:     { text: "what you say out loud",              to: "person",     toOpt: true },
+  text:    { text: "a private message (or the group chat)", to: "person+all" },
+  move:    { to: "place" },
+  eat:     {},
+  drink:   {},
+  work:    {},
+  rest:    {},
+  treat:   { to: "person", toOpt: true },
+  build:   { text: "which project" },
+  propose: { text: "name your project", to: "place", num: true, numLabel: "shifts" },
+  pay:     { to: "payee", num: true },
+  borrow:  { num: true },
+  idle:    { text: "what you do, e.g. 'browses the shelves'" },
+};
+
+const PAYEES = ["the bank", "the town fund", "the poor box"];
+
+function fillSelect(el, items, { keep = true, placeholder = null } = {}) {
+  const prev = keep ? el.value : null;
+  el.innerHTML = (placeholder ? '<option value="">' + esc(placeholder) + "</option>" : "") +
+    items.map((o) => {
+      const v = typeof o === "string" ? o : o.v;
+      const t = typeof o === "string" ? o : o.t;
+      return '<option value="' + esc(v) + '">' + esc(t) + "</option>";
+    }).join("");
+  if (prev && items.some((o) => (typeof o === "string" ? o : o.v) === prev)) el.value = prev;
+}
+
+function townNames(exclude) {
+  const a = ((state.snap && state.snap.agents) || []).map((x) => x.name);
+  return exclude ? a.filter((n) => n !== exclude) : a;
+}
+function townPlaces() {
+  return Object.keys((state.snap && state.snap.locations) || {}).sort();
+}
+
+function syncComposerFields() {
+  const spec = VERBS[$("verb").value] || {};
+  const txt = $("argText"), to = $("argTo"), num = $("argNum");
+  txt.style.display = spec.text ? "" : "none";
+  txt.placeholder = spec.text || "";
+  num.style.display = spec.num ? "" : "none";
+  num.placeholder = spec.numLabel || "amount";
+  if (!spec.to) { to.style.display = "none"; return; }
+  to.style.display = "";
+  const me = state.insp.name;
+  if (spec.to === "place") fillSelect(to, townPlaces(), { placeholder: "where to…" });
+  else if (spec.to === "payee") fillSelect(to, townNames(me).concat(PAYEES), { placeholder: "pay who…" });
+  else if (spec.to === "person+all")
+    fillSelect(to, [{ v: "everyone", t: "everyone (group chat)" }].concat(townNames(me)),
+               { placeholder: "message who…" });
+  else fillSelect(to, townNames(me), { placeholder: spec.toOpt ? "(anyone here)" : "who…" });
+}
+
+/* The inspector polls every 2s. A poll issued BEFORE you took or released
+   the seat can land after, and would flip the label back to the stale
+   answer. Local intent wins for a moment; after that the server is
+   authoritative again. */
+let seatStamp = 0;
+
+function updateSeatFromPoll(possessed) {
+  if (performance.now() - seatStamp < 2500) return;
+  updateSeat(possessed);
+}
+
+function updateSeat(possessed) {
+  const lbl = $("seatLabel"), btn = $("seatBtn");
+  lbl.textContent = possessed ? "you are driving this villager" : "the seat is empty";
+  lbl.className = "seatlabel" + (possessed ? " on" : "");
+  btn.textContent = possessed ? "Give it back" : "Take the seat";
+  btn.className = "ctlbtn" + (possessed ? " on" : "");
+  $("composer").className = possessed ? "open" : "";
+}
+
+async function seatPost(body) {
+  const r = await fetch("/api/possess/" + encodeURIComponent(state.insp.name), {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { ok: r.ok, data: await r.json().catch(() => ({})) };
+}
+
+$("seatBtn").addEventListener("click", async () => {
+  const taking = $("seatBtn").textContent === "Take the seat";
+  seatStamp = performance.now();
+  const { data } = await seatPost({ possess: taking });
+  seatStamp = performance.now();
+  updateSeat(!!data.possessed);
+  if (taking) syncComposerFields();
+});
+
+$("verb").addEventListener("change", syncComposerFields);
+
+$("actGo").addEventListener("click", async () => {
+  const verb = $("verb").value, spec = VERBS[verb] || {};
+  const res = $("actResult");
+  const act = { action: verb };
+  const to = $("argTo").value, txt = $("argText").value.trim(), num = $("argNum").value;
+
+  if (spec.to && !spec.toOpt && !to) {
+    res.className = "err"; res.textContent = "pick a " + (spec.to === "place" ? "place" : "recipient"); return;
+  }
+  if (spec.text && !txt) { res.className = "err"; res.textContent = "say something first"; return; }
+  if (spec.num && !num)  { res.className = "err"; res.textContent = "how much?"; return; }
+
+  if (spec.to && to) act.to = to;
+  if (spec.text) {
+    if (verb === "build") act.project = txt;
+    else if (verb === "propose") { act.project = txt; act.site = to; delete act.to; }
+    else if (verb === "idle") act.note = txt;
+    else act.text = txt;
+  }
+  if (spec.num) act[verb === "propose" ? "work" : "amount"] = Number(num);
+
+  res.className = ""; res.textContent = "queued — lands on the next tick…";
+  const { ok, data } = await seatPost(act);
+  if (ok && data.queued) {
+    res.className = "ok";
+    res.textContent = "queued: " + verb + " — watch the transcript";
+    $("argText").value = "";
+    seatStamp = performance.now();
+    updateSeat(true);
+  } else {
+    res.className = "err";
+    res.textContent = data.error || "the town refused that";
+  }
+});
+
+/* ------------------------------------------------------- the Director */
+let META = null;
+
+async function loadMeta() {
+  try {
+    const r = await fetch("/api/casts");
+    if (!r.ok) return;
+    META = await r.json();
+  } catch (e) { return; }
+
+  fillSelect($("verb"), Object.keys(VERBS), { keep: false });
+  syncComposerFields();
+
+  $("chaosGrid").innerHTML =
+    (META.chaos || []).map((c) => '<button data-ev="' + esc(c) + '">' +
+      esc(c.replace(/_/g, " ")) + "</button>").join("") +
+    '<button data-ev="" style="color:var(--accent);border-color:#574327">roll the dice</button>';
+  $("chaosGrid").querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", async () => {
+      const body = b.dataset.ev ? { event: b.dataset.ev } : {};
+      const out = $("dirResult");
+      out.className = "note"; out.textContent = "…";
+      try {
+        const r = await fetch("/api/chaos", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        out.className = r.ok ? "note" : "note warn";
+        out.textContent = r.ok
+          ? "queued: " + j.event + " — it lands on the next tick"
+          : (j.error || "the Director refused that");
+      } catch (e) { out.className = "note warn"; out.textContent = "the Director is unreachable"; }
+    });
+  });
+
+  fillSelect($("recastModel"),
+    (META.minds || []).map((m) => ({ v: m.model + "|" + m.host, t: m.model + "  ·  " + m.host })),
+    { keep: false });
+}
+
+$("dirBtn").addEventListener("click", () => {
+  const d = $("director");
+  const open = d.className !== "open";
+  d.className = open ? "open" : "";
+  $("dirBtn").className = "ctlbtn" + (open ? " on" : "");
+  if (open) fillSelect($("recastWho"), townNames(), { placeholder: "which villager…" });
+});
+
+$("recastGo").addEventListener("click", async () => {
+  const who = $("recastWho").value;
+  const [model, host] = ($("recastModel").value || "").split("|");
+  const out = $("dirResult");
+  if (!who || !model) { out.className = "note warn"; out.textContent = "pick a villager and a mind"; return; }
+  out.className = "note"; out.textContent = "…";
+  try {
+    const r = await fetch("/api/recast", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: who, model: model, host: host }),
+    });
+    const j = await r.json();
+    out.className = r.ok ? "note" : "note warn";
+    out.textContent = r.ok
+      ? j.recast + ": " + j.was + " → " + j.now + " (next tick)"
+      : (j.error || "that transplant was refused");
+  } catch (e) { out.className = "note warn"; out.textContent = "the town is unreachable"; }
+});
+
+/* =====================================================================
    BOOT
 ===================================================================== */
 resize();
 connect();
+loadMeta();
 requestAnimationFrame(render);
 </script>
 </body>

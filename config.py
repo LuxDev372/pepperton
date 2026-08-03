@@ -40,19 +40,112 @@ OLLAMA_TIMEOUT = 120          # seconds; small models on busy GPUs take a while
 OLLAMA_KEEP_ALIVE = "30m"
 OLLAMA_OPTIONS = {"temperature": 0.8, "num_ctx": 4096}
 
+# ------------------------------------------------------------- providers
+# A provider is HOW a mind is reached. The second element of every
+# MODEL_POOL entry is a key into this table (every OLLAMA_HOSTS key is
+# folded in automatically as an {"api": "ollama"} provider, so old configs
+# and the "default" key keep working untouched).
+#
+# Adding a mind later = one entry here + one line in a cast. No code.
+#
+#   api          "ollama"  -> POST {url}/api/chat        (local AND Ollama-cloud)
+#                "openai"  -> POST {url}/chat/completions (OpenAI-compatible:
+#                             OpenRouter, Groq, Together, vLLM, LM Studio, ...)
+#   url          base URL, no trailing slash
+#   api_key_env  env var holding the key. Never put a key in this file.
+#                Missing/empty key = that villager quietly falls back to its
+#                mock understudy instead of crashing the town.
+#   timeout      seconds (defaults to OLLAMA_TIMEOUT)
+#   json_mode    openai only: ask the server for strict JSON. A few
+#                gateways reject the field — set False if you see 400s.
+#   headers      extra headers merged into the request
+#   options      per-provider overrides merged over OLLAMA_OPTIONS
+PROVIDERS = {
+    # Ollama-cloud tags (anything ending ":cloud") are served THROUGH the
+    # local daemon once `ollama signin` is done — same URL as "default",
+    # but they cross a network and think hard, so they get a real timeout.
+    "cloud": {
+        "api": "ollama",
+        "url": "http://127.0.0.1:11434",
+        "timeout": 300,
+    },
+
+    # --- OpenAI-compatible gateways. Inert until the env var is set. ---
+    "openrouter": {
+        "api": "openai",
+        "url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "timeout": 180,
+        "headers": {"HTTP-Referer": "http://localhost:8811",
+                    "X-Title": TOWN_NAME},
+    },
+    "groq": {
+        "api": "openai",
+        "url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "timeout": 120,
+    },
+    "openai": {
+        "api": "openai",
+        "url": "https://api.openai.com/v1",
+        "api_key_env": "OPENAI_API_KEY",
+        "timeout": 180,
+    },
+}
+
+# Hidden deliberation makes a villager geologically slow and adds nothing
+# the town can see. Any model tag containing one of these substrings gets
+# `"think": false` on Ollama requests. (Verified 2026-08-03: harmless on
+# models with no thinking mode — Ollama ignores it rather than erroring.)
+THINK_OFF = ("qwen3", "glm-5", "deepseek-v4", "nemotron", "gpt-oss")
+
+# ------------------------------------------------------------------ casts
 # The casting pool: villager N gets MODEL_POOL[N % len(MODEL_POOL)].
 # Heterogeneous minds are the whole point — different model families are
-# different cognitive species. Each entry: (model_tag, host_key).
-# Suggested casts by VRAM — FAMILY diversity matters more than size:
-#   ~8GB:  three 3B-4B models          ~16GB: the default below
-#   24GB+: swap in 7B-8B minds freely  multi-GPU: use host keys per entry
-MODEL_POOL = [
-    ("mistral:latest", "default"),      # the confident one (will invent facts, found things)
-    ("qwen3:8b", "default"),            # the overthinker (thinking auto-disabled)
-    ("qwen2.5:latest", "default"),      # the earnest elder
-    ("phi4-mini:latest", "default"),    # the small one with big diary energy
-    ("llama3.2:3b", "default"),         # the agreeable parrot (the laws keep it honest)
-]
+# different cognitive species. Each entry: (model_tag, provider_key).
+#
+# Pick your cast with CAST below; add your own by adding a key here.
+CASTS = {
+    # Ollama-cloud minds. No VRAM needed, but every decision is a network
+    # round trip — consider raising real_seconds_per_tick if the town lags.
+    "cloud": [
+        ("glm-5.2:cloud",           "cloud"),   # the confident one (will invent facts, found things)
+        ("minimax-m3:cloud",        "cloud"),   # the long memory — deliberates no matter what you tell it
+        ("deepseek-v4-flash:cloud", "cloud"),   # quick, literal, faintly impatient
+        ("nemotron-3-super:cloud",  "cloud"),   # the earnest elder
+        ("gemma4:31b-cloud",        "cloud"),   # decorates every answer in code fences; we excavate
+        # Check what your account actually serves before casting a tag:
+        # some cloud models are billed as extra usage and answer every
+        # request with a 402 until that balance is funded. A villager on
+        # one of those falls back to its mock understudy every tick.
+    ],
+
+    # The upstream local cast. Suggested by VRAM — FAMILY diversity matters
+    # more than size:
+    #   ~8GB:  three 3B-4B models          ~16GB: the list below
+    #   24GB+: swap in 7B-8B minds freely  multi-GPU: use host keys per entry
+    "local": [
+        ("mistral:latest", "default"),      # the confident one (will invent facts, found things)
+        ("qwen3:8b", "default"),            # the overthinker (thinking auto-disabled)
+        ("qwen2.5:latest", "default"),      # the earnest elder
+        ("phi4-mini:latest", "default"),    # the small one with big diary energy
+        ("llama3.2:3b", "default"),         # the agreeable parrot (the laws keep it honest)
+    ],
+
+    # Cloud minds next to local ones — the widest spread of cognitive
+    # species, and the small local models keep the town moving while the
+    # cloud ones think. Needs both a GPU and `ollama signin`.
+    "mixed": [
+        ("glm-5.2:cloud",    "cloud"),     # the confident one, thinking off
+        ("mistral:latest",   "default"),   # local, fast, invents freely
+        ("minimax-m3:cloud", "cloud"),     # the long memory
+        ("llama3.2:3b",      "default"),   # local, tiny, agreeable
+        ("phi4-mini:latest", "default"),   # local, big diary energy
+    ],
+}
+
+CAST = "local"                      # which key of CASTS the town is cast from
+MODEL_POOL = CASTS[CAST]
 
 # ---------------------------------------------------------------- world
 WORLD_SEED = None      # None = random town each run; set an int to pin the cast
