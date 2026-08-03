@@ -26,7 +26,14 @@ import os
 import shutil
 import sys
 
-sys.path.insert(0, ".")
+# Scratch directory, never the project root — this file rmtree's "data",
+# and a live town keeps its whole life in there. Same protection lisim's
+# PR #1 gave selftest.py, for the same reason.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRATCH = os.path.join(ROOT, ".selftest")
+sys.path.insert(0, ROOT)
+os.makedirs(SCRATCH, exist_ok=True)
+os.chdir(SCRATCH)
 
 import config
 
