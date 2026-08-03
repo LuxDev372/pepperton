@@ -1,7 +1,10 @@
 """Villager minds.
 
 Three species:
-  OllamaBrain   — a real local LLM, per-agent model + host (the point).
+  LLMBrain      — a real model, per-agent model + provider (the point).
+                  Speaks Ollama (local or cloud) or any OpenAI-compatible
+                  gateway; which one is a config detail, not a code one.
+                  `OllamaBrain` is kept as an alias for older configs.
   MockBrain     — scripted, deterministic, GPU-free; keeps the whole sim
                   testable end-to-end and doubles as the fallback when a
                   model host is unreachable.
@@ -11,12 +14,31 @@ Three species:
                   never knows which citizens are possessed.
 """
 
+import os
 import random
 
 import requests
 
 import config
 from sim import prompts
+
+
+# ------------------------------------------------------------- providers
+def providers():
+    """The full provider table: every OLLAMA_HOSTS key folded in as a plain
+    Ollama provider, then config.PROVIDERS layered on top. This is what
+    keeps a bare {"default": "http://..."} config working unchanged."""
+    table = {k: {"api": "ollama", "url": v}
+             for k, v in getattr(config, "OLLAMA_HOSTS", {}).items()}
+    table.update(getattr(config, "PROVIDERS", {}))
+    return table
+
+
+def resolve_provider(key):
+    """Provider spec for a host/provider key, falling back to 'default'."""
+    table = providers()
+    return table.get(key) or table.get("default") or {
+        "api": "ollama", "url": "http://127.0.0.1:11434"}
 
 
 class BrainBase:
@@ -27,34 +49,107 @@ class BrainBase:
         raise NotImplementedError
 
 
-# ---------------------------------------------------------------- Ollama
-class OllamaBrain(BrainBase):
+# ------------------------------------------------------------------- LLM
+class LLMBrain(BrainBase):
+    """One villager, one model, one provider. The wire format is chosen by
+    the provider spec; everything above this line is provider-agnostic."""
+
     def __init__(self, model, host_key="default"):
         self.model = model
-        self.url = config.OLLAMA_HOSTS.get(host_key, config.OLLAMA_HOSTS["default"])
+        self.host_key = host_key
+        self.provider = resolve_provider(host_key)
+        self.url = self.provider.get("url", "http://127.0.0.1:11434").rstrip("/")
         self.understudy = None   # set by engine: MockBrain fallback
 
+    # -- helpers ------------------------------------------------------
+    @property
+    def timeout(self):
+        return self.provider.get("timeout", config.OLLAMA_TIMEOUT)
+
+    def _options(self):
+        opts = dict(config.OLLAMA_OPTIONS)
+        opts.update(self.provider.get("options", {}))
+        return opts
+
+    def _thinks_too_much(self):
+        tag = self.model.lower()
+        return any(s in tag for s in getattr(config, "THINK_OFF", ("qwen3",)))
+
+    def _api_key(self):
+        """Read the provider's key from the environment. Never logged, never
+        written to config — a missing key is a normal, survivable state."""
+        env = self.provider.get("api_key_env")
+        if not env:
+            return None
+        key = os.environ.get(env, "").strip()
+        if not key:
+            raise requests.RequestException(
+                f"{env} is not set — no key for provider {self.host_key!r}")
+        return key
+
+    # -- the wire -----------------------------------------------------
     def _chat(self, system, user):
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": user}]
+        if self.provider.get("api") == "openai":
+            return self._chat_openai(messages)
+        return self._chat_ollama(messages)
+
+    def _chat_ollama(self, messages):
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
             "format": "json",
             "stream": False,
             "keep_alive": config.OLLAMA_KEEP_ALIVE,
-            "options": config.OLLAMA_OPTIONS,
+            "options": self._options(),
         }
-        # qwen3-family models deliberate at length in hidden thinking mode,
-        # which makes those villagers geologically slow. Turn it off.
-        if "qwen3" in self.model.lower():
+        # Some families deliberate at length in hidden thinking mode, which
+        # makes those villagers geologically slow. Turn it off where we can.
+        if self._thinks_too_much():
             payload["think"] = False
-        r = requests.post(
-            f"{self.url}/api/chat", json=payload, timeout=config.OLLAMA_TIMEOUT,
-        )
+        r = requests.post(f"{self.url}/api/chat", json=payload,
+                          timeout=self.timeout)
         r.raise_for_status()
-        return r.json()["message"]["content"]
+        body = self._body(r)
+        return str(body.get("message", {}).get("content") or "")
+
+    def _chat_openai(self, messages):
+        opts = self._options()
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "temperature": opts.get("temperature", 0.8),
+        }
+        if self.provider.get("json_mode", True):
+            payload["response_format"] = {"type": "json_object"}
+        headers = {"Content-Type": "application/json"}
+        headers.update(self.provider.get("headers", {}))
+        key = self._api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        r = requests.post(f"{self.url}/chat/completions", json=payload,
+                          headers=headers, timeout=self.timeout)
+        r.raise_for_status()
+        choices = self._body(r).get("choices") or [{}]
+        return str(choices[0].get("message", {}).get("content") or "")
+
+    @staticmethod
+    def _body(r):
+        """Decode a response, treating a 200-with-error-payload (and any
+        non-JSON body) as a transport failure so the understudy takes over
+        instead of the tick dying on a KeyError."""
+        try:
+            body = r.json()
+        except ValueError:
+            raise requests.RequestException(
+                f"non-JSON reply ({r.text[:120]!r})")
+        if not isinstance(body, dict):
+            raise requests.RequestException(f"unexpected reply shape: {type(body).__name__}")
+        if body.get("error"):
+            raise requests.RequestException(str(body["error"])[:200])
+        return body
 
     def decide(self, agent, world, perceptions, memories):
         system = prompts.system_prompt(agent, world)
@@ -63,7 +158,7 @@ class OllamaBrain(BrainBase):
         try:
             raw = self._chat(system, user)
         except requests.RequestException as e:
-            agent.last_reply = f"(ollama error: {e})"
+            agent.last_reply = f"({self.host_key}/{self.model} error: {e})"
             if self.understudy:
                 action, _, reason = self.understudy.decide(agent, world, perceptions, memories)
                 return action, agent.last_reply, f"host unreachable; understudy acted: {reason}"
@@ -95,6 +190,10 @@ class OllamaBrain(BrainBase):
         except requests.RequestException:
             pass
         return fallback
+
+
+# Older configs and callers said "Ollama"; the class outgrew the name.
+OllamaBrain = LLMBrain
 
 
 # ------------------------------------------------------------------ Mock
@@ -291,6 +390,6 @@ def build_brain(agent, seed):
     if config.MOCK_MODE:
         core = mock
     else:
-        core = OllamaBrain(agent.model, agent.host)
+        core = LLMBrain(agent.model, agent.host)
         core.understudy = mock
     return ExternalBrain(core)

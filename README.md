@@ -78,6 +78,60 @@ between temperaments is where the show comes from — cast in
 `config.py` (`MODEL_POOL`), spread across multiple GPUs via
 `OLLAMA_HOSTS` if you have them.
 
+### The control panel
+
+The observatory is no longer watch-only.
+
+**🎬 Director** (header) — roll any chaos event by name or take a random
+weighted one, and perform a brain transplant: swap which model plays a
+villager mid-run, memories and money and grudges intact.
+
+**Take the seat** (click a villager, top of the inspector) — possession
+with a UI. Pick a verb, fill in the fields it asks for, and the action
+lands on the next tick. All thirteen verbs are there; `text → everyone`
+posts to the town group chat, which is the surest way to be heard, since
+untargeted speech only reaches whoever is standing in the room.
+
+Writes are queued and applied between ticks rather than blocking on the
+engine lock — clicking a button used to wait up to the full model timeout
+(107s, measured) for the town to stop thinking.
+
+### Casts and providers
+
+`config.py` holds named **casts** — pick one with `CAST`:
+
+| cast | minds | needs |
+|------|-------|-------|
+| `local` | the five upstream families (mistral, qwen3, qwen2.5, phi4-mini, llama3.2) | a GPU |
+| `cloud` | Ollama-cloud tags (glm, minimax, deepseek, nemotron, gemma) | `ollama signin` |
+| `mixed` | cloud minds beside small local ones | both |
+
+Each entry is `(model_tag, provider_key)`. A **provider** is how that mind
+is reached, declared in `config.PROVIDERS`:
+
+```python
+"myrouter": {"api": "openai",                       # or "ollama"
+             "url": "https://openrouter.ai/api/v1",
+             "api_key_env": "OPENROUTER_API_KEY"},  # key lives in the env
+```
+
+`api: "ollama"` speaks `/api/chat` (local models and `:cloud` tags alike);
+`api: "openai"` speaks `/chat/completions`, so any OpenAI-compatible
+gateway — OpenRouter, Groq, Together, vLLM, LM Studio — is a config entry,
+not a code change. Every `OLLAMA_HOSTS` key is folded in automatically, so
+older configs keep working.
+
+A provider that is unreachable, unpaid, or missing its key does not stop
+the town: that villager quietly falls back to its mock understudy, and the
+reason shows up in the observatory's inspector. Check a cast for real
+before you run on it:
+
+```bash
+python tests/brains_live.py               # the current cast
+python tests/brains_live.py mixed         # some other cast
+python tests/brains_live.py mistral:latest@default   # one mind
+```
+
 ## What's in the box
 
 ```
@@ -85,7 +139,8 @@ config.py          every knob: pacing (accelerated <-> realtime), casting,
                    archetypes, town voice, needs, radio feeds, chaos weights
 sim/world.py       locations, clock, and the physics that keep models honest
 sim/memory.py      Stanford-style memory streams (recency+importance+relevance)
-sim/brains.py      OllamaBrain / MockBrain / ExternalBrain (possession seat)
+sim/brains.py      LLMBrain (ollama + openai-compatible providers) /
+                   MockBrain / ExternalBrain (possession seat)
 sim/engine.py      the tick loop, decision cadence, nightly reflections
 sim/radio.py       real RSS headlines -> in-world bulletins (info has geography:
                    only villagers AT the radio hear the news)

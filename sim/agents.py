@@ -13,7 +13,7 @@ class Agent:
         self.quirk = quirk
         self.goal = goal
         self.model = model
-        self.host = host        # key into config.OLLAMA_HOSTS
+        self.host = host        # key into config.PROVIDERS / OLLAMA_HOSTS
         self.home = home
         self.location = home
         self.money = 0
