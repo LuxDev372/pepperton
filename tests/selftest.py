@@ -123,9 +123,69 @@ def _extra():
 
 _extra()
 
+# ---- appended by v2.1: Room at the Inn + withholding ----
+def _inn_and_taxes():
+    fresh_data()
+    e = Engine(seed=41)
+    w = e.world
+    ags = list(w.agents.values())
+    a = ags[0]
+
+    # withholding: wages are taxed at the till, straight to the fund
+    config.INCOME_TAX = 0.15
+    a.job = "cook"
+    w.tills["Rosie's Diner"] = 50.0
+    fund0 = w.tills[config.TOWN_FUND]
+    money0 = a.money
+    w.pay_wage(a, 4)
+    check("wages are taxed to the fund",
+          round(a.money - money0, 2) == 3.4 and
+          round(w.tills[config.TOWN_FUND] - fund0, 2) == 0.6,
+          f"net +{round(a.money - money0, 2)}, fund +{round(w.tills[config.TOWN_FUND] - fund0, 2)}")
+
+    # an inn-shaped proposal is shelter infrastructure, not a monument
+    for stock in w.projects[:2]:
+        stock["complete"] = True   # free up board slots (cap is 3 open)
+    a.location = "the plaza"
+    ok, why = w.execute(a, {"action": "propose",
+                            "project": "the Pepperton Motel",
+                            "site": "the plaza", "work": 10})
+    proj = next(p for p in w.projects if "Motel" in p["name"])
+    check("a motel proposal is recognized as an inn",
+          ok and proj.get("inn") and not proj.get("housing"), why[:50])
+    # "dinner theater" must NOT read as an inn
+    ok2, _ = w.execute(a, {"action": "propose", "project": "dinner theater",
+                           "site": "the plaza", "work": 10})
+    proj2 = next((p for p in w.projects if "theater" in p["name"]), None)
+    check("'dinner' does not summon an inn",
+          ok2 and proj2 is not None and not proj2.get("inn"), "")
+
+    # completion opens real beds; a homeless villager's rent goes to the fund
+    proj["done"] = proj["work"] - 1
+    a.activity = {"type": "build", "project": proj["name"],
+                  "until_tick": w.tick_no + 8}
+    e._apply_needs(a)   # finishes the build
+    inn_locs = [k for k, v in w.locations.items() if v.get("inn")]
+    check("a finished inn opens its doors", len(inn_locs) == 1,
+          f"{inn_locs}")
+    drifter = ags[1]
+    drifter.home = None
+    drifter.location = inn_locs[0]
+    drifter.money = 20
+    drifter.needs["energy"] = 30
+    fund1 = w.tills[config.TOWN_FUND]
+    ok, msg = w.execute(drifter, {"action": "rest"})
+    check("inn beds shelter the homeless, fund the town",
+          ok and drifter.asleep and
+          round(w.tills[config.TOWN_FUND] - fund1, 2) == config.INN_ROOM_COST,
+          msg[:60])
+    fresh_data()
+
+
 # ---- appended by v2.0: the Invisible Hand regression ----
 def _economy():
     fresh_data()
+    config.INCOME_TAX = 0.0   # v2.0 mechanics tested untaxed; tax has its own test
     e = Engine(seed=31)
     w = e.world
     ags = list(w.agents.values())
@@ -265,6 +325,7 @@ def _economy():
     fresh_data()
 
 _economy()
+_inn_and_taxes()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

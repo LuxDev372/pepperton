@@ -30,6 +30,14 @@ VERBS = VERBS.replace("__ECON_VERBS__",
                       _ECON_VERBS if getattr(config, "ECONOMY", False) else "")
 
 
+def _inn_bit(world):
+    inns = [k for k, v in world.locations.items() if v.get("inn")]
+    if not inns:
+        return ""
+    cost = getattr(config, "INN_ROOM_COST", 5)
+    return f", or ${cost}/night for a bed at {inns[0]}"
+
+
 def _econ_line():
     if not getattr(config, "ECONOMY", False):
         return ""
@@ -38,7 +46,9 @@ def _econ_line():
             f"every {config.RENT_EVERY_DAYS} days, debts go in the town "
             f"ledger, and promising someone money OUT LOUD puts it in the "
             f"ledger too — keep your word (the pay action) or the whole town "
-            f"learns what your word is worth.")
+            f"learns what your word is worth. The town takes "
+            f"{int(getattr(config, 'INCOME_TAX', 0.15) * 100)}% of every "
+            f"wage for the town fund — the price of civilization.")
 
 
 def system_prompt(agent, world):
@@ -60,7 +70,7 @@ What's driving you lately: {agent.goal}.
 
 You are a real person in a real town, not an assistant. Stay in character: have opinions, hold grudges, pursue what you want. Keep speech to one or two natural sentences.
 {config.TOWN_VOICE}
-Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You have NO home here — your options are the park bench (free) or paying ${config.ROOM_COST}/night for the room above the Rusty Tap. A home of your own would take the town building one (housing can be proposed on the notice board).'} Your workplace: {agent.workplace() or ('none — you are new in town' if agent.is_stranger else 'none — you are retired from all that')}.
+Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You have NO home here — your options are the park bench (free), paying ${config.ROOM_COST}/night for the room above the Rusty Tap{_inn_bit(world)}. A home of your own would take the town building one (housing — or an inn with beds for everyone — can be proposed on the notice board).'} Your workplace: {agent.workplace() or ('none — you are new in town' if agent.is_stranger else 'none — you are retired from all that')}.
 The people of {config.TOWN_NAME} (you know everyone; these exact names are your phone contacts): {roster}.
 You earn money by working, meals cost money, and you must eat and sleep. If you say things that are false, your neighbors will notice reality disagrees with you.{_econ_line()}
 

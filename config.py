@@ -145,6 +145,20 @@ PROMISE_PATTERNS = (
 )
 PROMISE_GRACE_DAYS = 2
 
+# Room at the Inn (v2.1): the town can BUILD shelter infrastructure. A
+# proposed project whose name says motel/inn/hotel/hostel/lodge becomes,
+# on completion, a real place where anyone homeless can sleep for
+# INN_ROOM_COST a night — proceeds to the town fund (a municipal motel:
+# the homeless quietly fund the librarian's wages).
+INN_KEYWORDS = ("motel", "hotel", "boarding house", "boardinghouse",
+                "hostel", "lodge", "motor lodge")   # plus the word "inn"
+INN_ROOM_COST = 5           # a bed, cheaper than the Tap's $8 gouge
+
+# Withholding (v2.1): wages are taxed at the till, straight to the town
+# fund — the only reliable income the fund has besides rent. "To
+# encourage," as the town's founding courier put it.
+INCOME_TAX = 0.15
+
 # Overheard (untargeted) speech no longer interrupts everyone in the room —
 # it's still perceived, but only being directly addressed demands a response.
 # This is the main brake on runaway talk-chains.

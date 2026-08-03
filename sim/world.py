@@ -570,14 +570,23 @@ class World:
         except (TypeError, ValueError):
             work = 30
         work = max(10, min(80, work))
-        housing = any(k in nl for k in
+        # an inn-shaped name builds SHELTER INFRASTRUCTURE (beds for the
+        # homeless, nightly rate to the town fund); a house-shaped name
+        # builds one villager a home. Inn check first: "boarding house"
+        # is an inn, not a house.
+        name_words = set(nl.split())
+        inn = "inn" in name_words or any(
+            k in nl for k in getattr(config, "INN_KEYWORDS",
+                                     ("motel", "hotel", "boarding house",
+                                      "boardinghouse", "hostel", "lodge")))
+        housing = (not inn) and any(k in nl for k in
                       ("house", "cottage", "cabin", "home", "room", "shack",
                        "apartment", "bunkhouse", "quarters"))
         self.projects.append({
             "name": name, "site": site, "work": work, "done": 0,
             "complete": False, "contributors": {},
-            "proposed_by": agent.name, "housing": housing,
-            "icon": "🏠" if housing else "🏗️",
+            "proposed_by": agent.name, "housing": housing, "inn": inn,
+            "icon": "🏨" if inn else ("🏠" if housing else "🏗️"),
             "desc": f"{name} — proposed by {agent.name.split()[0]}",
             "adds": f"{name} stands here, built by the townsfolk",
         })
@@ -813,6 +822,21 @@ class World:
         if agent.needs["energy"] >= 85 and not self.clock.is_night:
             return False, ("is wide awake — lying down now would be pointless. "
                            "The day is out there, and so is everyone else")
+        if agent.home is None and self.locations.get(agent.location, {}).get("inn"):
+            cost = getattr(config, "INN_ROOM_COST", 5)
+            if agent.money < cost:
+                return False, (f"a bed here costs ${cost} a night and "
+                               f"they've got ${agent.money:.0f} — the park "
+                               f"bench is free")
+            agent.money -= cost
+            self.ledger.deposit(getattr(config, "TOWN_FUND", "the town fund"),
+                                cost)
+            agent.asleep = True
+            agent.activity = {"type": "rest", "until_tick": None, "note": "inn"}
+            self.emit("action", agent.name,
+                      f"took a bed at {agent.location} for the night",
+                      agent.location)
+            return True, f"slept at {agent.location} (-${cost}, to the town fund)"
         if agent.home is None and self.locations.get(agent.location, {}).get("bar"):
             if agent.money < config.ROOM_COST:
                 return False, (f"a room above the bar costs ${config.ROOM_COST} "

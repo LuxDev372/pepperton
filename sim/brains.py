@@ -150,9 +150,15 @@ class MockBrain(BrainBase):
         spoken_to = [p for p in perceptions if "said to you" in p["text"]]
         heard_radio = [p for p in perceptions if p["text"].startswith("The radio:")]
 
-        # night: go home and sleep (strangers make do with the park)
+        # night: go home and sleep (the homeless take an inn bed if the
+        # town has built one and they can cover it; else the park)
         if clock.is_night and not agent.asleep:
-            bed = agent.home or "the park"
+            bed = agent.home
+            if bed is None:
+                inns = [k for k, v in world.locations.items() if v.get("inn")]
+                if inns and agent.money >= getattr(config, "INN_ROOM_COST", 5):
+                    bed = inns[0]
+            bed = bed or "the park"
             if agent.location != bed:
                 return {"action": "move", "to": bed}, "", "mock: bedtime"
             return {"action": "rest"}, "", "mock: bedtime"

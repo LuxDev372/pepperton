@@ -101,6 +101,7 @@ class Engine:
         self._thread = None
         self._reflected_day = 0
         self._cached_snapshot = None    # rebuilt at the end of every tick
+        self._inspect_cache = {}        # last full chart per villager
         if state:
             world = self.world
             restored_tick = state["tick_no"]
@@ -348,7 +349,37 @@ class Engine:
                         # the world is permanently changed: the site's own
                         # description now carries the built thing + credit
                         loc = self.world.locations.get(proj["site"])
-                        if proj.get("housing"):
+                        if proj.get("inn"):
+                            # shelter infrastructure: beds for ANY homeless
+                            # villager, nightly rate to the town fund
+                            iname = proj["name"]
+                            if iname in self.world.locations:
+                                iname = f"{iname} (new)"
+                            cost = getattr(config, "INN_ROOM_COST", 5)
+                            self.world.locations[iname] = {
+                                "desc": (f"a hand-built inn — a warm bed for "
+                                         f"anyone without a roof, ${cost}/night "
+                                         f"to the town fund (built by {firsts})"),
+                                "inn": True,
+                            }
+                            self.world.emit(
+                                "world", None,
+                                f"{iname} is OPEN — beds for anyone without a "
+                                f"roof, ${cost} a night, proceeds to the town "
+                                f"fund. No one has to sleep in the park again "
+                                f"(unless they're broke).",
+                                proj["site"])
+                            for other in self.world.agents.values():
+                                other.pending.append({
+                                    "text": (f"{iname} is open: any villager "
+                                             f"without a home can sleep there "
+                                             f"for ${cost}/night (rest action, "
+                                             f"at {iname}). Proceeds go to the "
+                                             f"town fund."),
+                                    "interrupt": other.home is None,
+                                    "sim_time": self.world.clock.hhmm,
+                                })
+                        elif proj.get("housing"):
                             # a housing project becomes a REAL new home
                             hname = proj["name"]
                             if hname in self.world.locations:
@@ -606,8 +637,29 @@ class Engine:
         }
 
     def inspect(self, name):
-        with self.lock:
-            return self._inspect_locked(name)
+        """The click-a-villager chart. In live mode the engine lock can be
+        held for many seconds while models think — rather than freeze the
+        inspector panel, wait briefly, then serve the last full chart we
+        built (marked stale). The fresh one arrives when the tick clears."""
+        if not self.lock.acquire(timeout=2.0):
+            cached = self._inspect_cache.get(name)
+            if cached is not None:
+                return {**cached, "stale": True}
+            snap = self._cached_snapshot
+            if snap:
+                for a in snap["agents"]:
+                    if a["name"] == name:
+                        return {**a, "stale": True,
+                                "last_reason": "(mid-thought — full chart "
+                                               "when the tick clears)"}
+            return None
+        try:
+            data = self._inspect_locked(name)
+            if data is not None:
+                self._inspect_cache[name] = data
+            return data
+        finally:
+            self.lock.release()
 
     def _inspect_locked(self, name):
         a = self.world.agents.get(name)

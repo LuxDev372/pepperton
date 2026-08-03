@@ -168,7 +168,13 @@ class Ledger:
         paid = min(float(wage), max(0.0, avail))
         if paid > 0:
             self.tills[till_key] = round(avail - paid, 2)
-            agent.money += paid
+            # withholding: the town takes its cut at the till, straight to
+            # the fund that pays the public workers ("to encourage")
+            tax = round(paid * getattr(config, "INCOME_TAX", 0.15), 2)
+            agent.money += paid - tax
+            if tax > 0:
+                self.tills[config.TOWN_FUND] = round(
+                    self.tills.get(config.TOWN_FUND, 0.0) + tax, 2)
         short = round(float(wage) - paid, 2)
         if short > 0:
             debt = self.add_debt(till_key, agent.name, short,
