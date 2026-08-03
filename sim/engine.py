@@ -55,6 +55,17 @@ _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "pending", "urgent_flag"]
 
 
+def _mock_with_rng(brain):
+    """Walk a brain's understudy chain to the MockBrain that owns the seeded
+    RNG (possession seats wrap live brains, live brains wrap mocks)."""
+    understudy = getattr(brain, "understudy", None)
+    if understudy is not None and not hasattr(understudy, "rng"):
+        understudy = getattr(understudy, "understudy", None)
+    if understudy is not None and hasattr(understudy, "rng"):
+        return understudy
+    return None
+
+
 class Engine:
     def __init__(self, seed=None, state=None):
         if state:
@@ -89,6 +100,7 @@ class Engine:
         self.lock = threading.RLock()   # guards world/brains vs API threads
         self._thread = None
         self._reflected_day = 0
+        self._cached_snapshot = None    # rebuilt at the end of every tick
         if state:
             world = self.world
             restored_tick = state["tick_no"]
@@ -136,9 +148,9 @@ class Engine:
             world.tills.update(state.get("tills", {}))
             world.debts = state.get("debts", [])
             world.promises = state.get("promises", [])
-            world._ledger_seq = state.get("ledger_seq", 0)
-            world._rent_day_done = state.get("rent_day_done", 0)
-            world._ledger_day_done = state.get("ledger_day_done", 0)
+            world.ledger.seq = state.get("ledger_seq", 0)
+            world.ledger.rent_day_done = state.get("rent_day_done", 0)
+            world.ledger.swept_day = state.get("ledger_day_done", 0)
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
@@ -152,12 +164,9 @@ class Engine:
                 if rs.get("radio") and getattr(self.radio, "rng", None):
                     self.radio.rng.setstate(_rng_load(rs["radio"]))
                 for name, st_ in (rs.get("brains") or {}).items():
-                    b = self.brains.get(name)
-                    mb = getattr(b, "understudy", None)
-                    if mb is not None and not hasattr(mb, "rng"):
-                        mb = getattr(mb, "understudy", None)
-                    if mb is not None and hasattr(mb, "rng"):
-                        mb.rng.setstate(_rng_load(st_))
+                    mock = _mock_with_rng(self.brains.get(name))
+                    if mock is not None:
+                        mock.rng.setstate(_rng_load(st_))
             except (TypeError, ValueError) as e:
                 print(f"[ENGINE] RNG restore skipped: {e}", flush=True)
             # scrub ghost relationships (pre-1.17 None-key bug)
@@ -209,12 +218,10 @@ class Engine:
             af["recent_own_says"] = [sorted(x) for x in a.recent_own_says]
             agents[a.name] = af
         brains_rng = {}
-        for name, b in self.brains.items():
-            mb = getattr(b, "understudy", None)
-            if mb is not None and not hasattr(mb, "rng"):
-                mb = getattr(mb, "understudy", None)
-            if mb is not None and hasattr(mb, "rng"):
-                brains_rng[name] = _rng_dump(mb.rng.getstate())
+        for name, brain in self.brains.items():
+            mock = _mock_with_rng(brain)
+            if mock is not None:
+                brains_rng[name] = _rng_dump(mock.rng.getstate())
         state = {
             "seed": self.seed,
             "world_id": self.world_id,
@@ -238,9 +245,9 @@ class Engine:
             "tills": self.world.tills,
             "debts": self.world.debts,
             "promises": self.world.promises,
-            "ledger_seq": self.world._ledger_seq,
-            "rent_day_done": self.world._rent_day_done,
-            "ledger_day_done": self.world._ledger_day_done,
+            "ledger_seq": self.world.ledger.seq,
+            "rent_day_done": self.world.ledger.rent_day_done,
+            "ledger_day_done": self.world.ledger.swept_day,
         }
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -474,6 +481,9 @@ class Engine:
             self._reflected_day = self.world.clock.day
             self._nightly_reflections()
 
+        # refresh the observatory's lock-free snapshot (see snapshot())
+        self._cached_snapshot = self._snapshot_locked(0)
+
     def _nightly_reflections(self):
         for agent in self.world.agents.values():
             agent.pantry = 3    # overnight restock
@@ -542,8 +552,22 @@ class Engine:
 
     # ------------------------------------------------------------- state
     def snapshot(self, since_seq=0):
-        with self.lock:
-            return self._snapshot_locked(since_seq)
+        """Read path for the map and websocket. Serves the snapshot cached
+        at the end of the last completed tick, WITHOUT taking the engine
+        lock — in live mode a tick can hold that lock for many seconds
+        while models think, and the observatory should watch the town, not
+        the mutex. The cache is at most one tick stale, which is exactly
+        as fresh as the sim itself. (Live-lock tradeoff flagged by an
+        external review; this is the on-purpose decision.)"""
+        cached = self._cached_snapshot
+        if cached is None:
+            with self.lock:
+                return self._snapshot_locked(since_seq)
+        out = dict(cached)
+        out["paused"] = self.paused   # the one field that changes between ticks
+        if since_seq:
+            out["events"] = [e for e in cached["events"] if e["seq"] > since_seq]
+        return out
 
     def _snapshot_locked(self, since_seq=0):
         world = self.world

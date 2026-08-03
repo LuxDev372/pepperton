@@ -11,6 +11,7 @@ import re
 import threading
 
 import config
+from sim.ledger import Ledger
 
 
 _WORDS = re.compile(r"[a-z0-9']+")
@@ -90,21 +91,8 @@ class World:
             {**p, "done": 0, "complete": False, "contributors": {}}
             for p in config.PROJECTS
         ]
-        # ------------- the Invisible Hand: closed-loop money (v2.0) -------------
-        # Every dollar is somewhere: in a pocket, in a till, or in the fund.
-        self.tills = {}
-        if getattr(config, "ECONOMY", False):
-            for k, v in self.locations.items():
-                if v.get("bank"):
-                    self.tills[k] = float(config.BANK_SEED)
-                elif v.get("sells_food") or v.get("bar"):
-                    self.tills[k] = float(config.TILL_SEED)
-            self.tills[config.TOWN_FUND] = float(config.TOWN_FUND_SEED)
-        self.debts = []      # {"id","debtor","creditor","amount","reason","day","due_day","status"}
-        self.promises = []   # {"id","maker","to","text","day","due_day","status"}
-        self._ledger_seq = 0
-        self._rent_day_done = 0
-        self._ledger_day_done = 0
+        # economics live in sim/ledger.py; the World only hosts the physics
+        self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
         self._event_seq = 0
         os.makedirs("data", exist_ok=True)
@@ -134,275 +122,67 @@ class World:
                 return k
         return None
 
-    # ----------------------------------------------------------- the ledger
-    def _till_deposit(self, loc, amount):
-        if getattr(config, "ECONOMY", False) and loc in self.tills:
-            self.tills[loc] += float(amount)
+    # -------------- the ledger facade (economics: sim/ledger.py) ----------
+    @property
+    def tills(self):
+        return self.ledger.tills
 
-    def add_debt(self, debtor, creditor, amount, reason, due_day=None, merge=False):
-        if merge:
-            for d in self.debts:
-                if d["status"] == "open" and d["debtor"] == debtor and \
-                        d["creditor"] == creditor and d["reason"] == reason:
-                    d["amount"] = round(d["amount"] + float(amount), 2)
-                    return d
-        self._ledger_seq += 1
-        d = {"id": self._ledger_seq, "debtor": debtor, "creditor": creditor,
-             "amount": round(float(amount), 2), "reason": reason,
-             "day": self.clock.day, "due_day": due_day, "status": "open"}
-        self.debts.append(d)
-        return d
+    @property
+    def debts(self):
+        return self.ledger.debts
+
+    @debts.setter
+    def debts(self, value):
+        self.ledger.debts = value
+
+    @property
+    def promises(self):
+        return self.ledger.promises
+
+    @promises.setter
+    def promises(self, value):
+        self.ledger.promises = value
+
+    def add_debt(self, debtor, creditor, amount, reason, due_day=None,
+                 merge=False):
+        return self.ledger.add_debt(debtor, creditor, amount, reason,
+                                    due_day=due_day, merge=merge)
 
     def open_debts(self, debtor=None, creditor=None):
-        return [d for d in self.debts if d["status"] == "open"
-                and (debtor is None or d["debtor"] == debtor)
-                and (creditor is None or d["creditor"] == creditor)]
-
-    def _apply_to_debts(self, payer, payee, amount):
-        """Reduce payer->payee open debts, oldest first. Returns leftover."""
-        for d in self.debts:
-            if amount <= 0:
-                break
-            if d["status"] == "open" and d["debtor"] == payer and d["creditor"] == payee:
-                hit = min(amount, d["amount"])
-                d["amount"] = round(d["amount"] - hit, 2)
-                amount = round(amount - hit, 2)
-                if d["amount"] <= 0.01:
-                    d["amount"] = 0.0
-                    d["status"] = "paid"
-        return amount
-
-    def _settle_promises_on_payment(self, payer, payee_name):
-        """Any payment before the deadline keeps an open promise."""
-        for pr in self.promises:
-            if pr["status"] == "open" and pr["maker"] == payer.name and \
-                    pr["to"] == payee_name:
-                pr["status"] = "kept"
-                payer.relationships[payee_name] = \
-                    payer.relationships.get(payee_name, 0) + 2
-                payee = self.agents.get(payee_name)
-                if payee:
-                    payee.relationships[payer.name] = \
-                        payee.relationships.get(payer.name, 0) + 2
-                    payee.pending.append({
-                        "text": (f"{payer.name} said they'd pay you, and they "
-                                 f"actually did. A kept promise is rare currency."),
-                        "interrupt": False, "sim_time": self.clock.hhmm,
-                    })
-                self.emit("action", payer.name,
-                          f"kept their word to {payee_name}", payer.location,
-                          deliver=False)
-
-    # Gratitude idioms — "I owe you one", "I owe you a beer" — are warmth,
-    # not contracts. The ledger only wants MONEY promises. (Statute passed
-    # after Sam Fletcher was booked twice in one day for saying thank you.)
-    _PROMISE_IDIOMS = ("owe you one", "owe you a ", "owe you big")
-    _MONEY_WORDS = ("$", "pay you back", "pay you", "money", "dollar",
-                    "buck", "cash", "settle up")
-
-    def _is_money_promise(self, norm):
-        if not any(p in norm for p in config.PROMISE_PATTERNS):
-            return False
-        if any(idiom in norm for idiom in self._PROMISE_IDIOMS) and \
-                not any(m in norm for m in self._MONEY_WORDS):
-            return False
-        return True
-
-    def _detect_promise(self, agent, target, norm, text):
-        """Speech that creates obligation: the world writes payment promises
-        down, and the deadline passing in silence becomes public character."""
-        if not getattr(config, "ECONOMY", False) or not target:
-            return
-        if not self._is_money_promise(norm):
-            return
-        for pr in self.promises:
-            if pr["status"] == "open" and pr["maker"] == agent.name and \
-                    pr["to"] == target:
-                return   # one open promise per pair; talk is cheap, once
-        self._ledger_seq += 1
-        due = self.clock.day + config.PROMISE_GRACE_DAYS
-        self.promises.append({
-            "id": self._ledger_seq, "maker": agent.name, "to": target,
-            "text": text[:140], "day": self.clock.day, "due_day": due,
-            "status": "open",
-        })
-        agent.pending.append({
-            "text": (f"You just promised {target} money, out loud. The town "
-                     f"ledger has it now — pay them something by day {due} "
-                     f"(the pay action) or be known as a promise-breaker."),
-            "interrupt": False, "sim_time": self.clock.hhmm,
-        })
-
-    def _wage_till_key(self, agent):
-        """Which pot pays this villager. The bank's teller is paid from the
-        town fund — the bank's till is LOAN CAPITAL, not payroll (learned
-        the hard way: a bank that pays wages from its vault forecloses on
-        itself by day six)."""
-        wp = agent.workplace()
-        if not wp:
-            return config.TOWN_FUND
-        if self.locations.get(wp, {}).get("bank"):
-            return config.TOWN_FUND
-        return wp if wp in self.tills else config.TOWN_FUND
-
-    def wage_debt_of(self, till_key):
-        return sum(d["amount"] for d in self.debts
-                   if d["status"] == "open" and d["debtor"] == till_key)
+        return self.ledger.open_debts(debtor=debtor, creditor=creditor)
 
     def pay_wage(self, agent, wage):
-        """A shift-tick wage, paid FROM the employer's till (public jobs
-        draw on the town fund). Shortfalls become back-wage debt the
-        business settles automatically when cash comes in."""
-        if not getattr(config, "ECONOMY", False):
-            agent.money += wage
-            return
-        till_key = self._wage_till_key(agent)
-        avail = self.tills.get(till_key, 0.0)
-        paid = min(float(wage), max(0.0, avail))
-        if paid > 0:
-            self.tills[till_key] = round(avail - paid, 2)
-            agent.money += paid
-        short = round(float(wage) - paid, 2)
-        if short > 0:
-            d = self.add_debt(till_key, agent.name, short,
-                              f"back wages at {till_key}", merge=True)
-            if d["amount"] <= short + 0.01:   # first shortfall this stretch
-                agent.pending.append({
-                    "text": (f"The till at {till_key} couldn't cover your full "
-                             f"wage — the difference is on the books as back "
-                             f"pay. It'll come when business does."),
-                    "interrupt": False, "sim_time": self.clock.hhmm,
-                })
+        self.ledger.pay_wage(agent, wage)
+
+    def wage_debt_of(self, till_key):
+        return self.ledger.wage_debt_of(till_key)
 
     def settle_business_debts(self):
-        """Tills with cash pay their back-wage debts automatically."""
-        if not getattr(config, "ECONOMY", False):
-            return
-        for d in self.debts:
-            if d["status"] != "open" or d["debtor"] not in self.tills:
-                continue
-            till = self.tills.get(d["debtor"], 0.0)
-            if till <= 0:
-                continue
-            pay = round(min(till, d["amount"]), 2)
-            self.tills[d["debtor"]] = round(till - pay, 2)
-            d["amount"] = round(d["amount"] - pay, 2)
-            cred = self.agents.get(d["creditor"])
-            if cred:
-                cred.money += pay
-            if d["amount"] <= 0.01:
-                d["amount"] = 0.0
-                d["status"] = "paid"
-                if cred:
-                    cred.pending.append({
-                        "text": f"{d['debtor']} settled your back wages in full.",
-                        "interrupt": False, "sim_time": self.clock.hhmm,
-                    })
+        self.ledger.settle_business_debts()
 
     def credit_report(self, agent):
-        """(tier, limit, shifts) — the notice board IS the credit score."""
-        shifts = sum(p["contributors"].get(agent.name, 0)
-                     for p in self.projects)
-        mine = self.open_debts(debtor=agent.name)
-        overdue = [d for d in mine if d["due_day"] is not None
-                   and self.clock.day > d["due_day"]]
-        bank = self.bank_name()
-        if overdue:
-            return "bad", 0, shifts
-        if bank and self.open_debts(debtor=agent.name, creditor=bank):
-            return "extended", 0, shifts
-        if shifts >= config.CREDIT_GOOD_SHIFTS:
-            return "solid", config.LOAN_MAX_GOOD, shifts
-        return "thin", config.LOAN_MAX_SHAKY, shifts
+        return self.ledger.credit_report(agent)
 
     def morning_ledger(self):
-        """The 08:00 sweep: rent falls due, promise deadlines are judged,
-        the bank posts arrears. Idempotent per day."""
-        if not getattr(config, "ECONOMY", False):
-            return
-        day = self.clock.day
-        if self._ledger_day_done >= day:
-            return
-        self._ledger_day_done = day
-        # rent day: every RENT_EVERY_DAYS, skipping day 1
-        if day > 1 and (day - 1) % config.RENT_EVERY_DAYS == 0 and \
-                self._rent_day_done < day:
-            self._rent_day_done = day
-            for a in self.agents.values():
-                if not a.home:
-                    continue
-                if a.money >= config.RENT_COST:
-                    a.money -= config.RENT_COST
-                    self.tills[config.TOWN_FUND] = round(
-                        self.tills.get(config.TOWN_FUND, 0.0) + config.RENT_COST, 2)
-                    a.pending.append({
-                        "text": (f"Rent day — ${config.RENT_COST} on {a.home}, "
-                                 f"paid to the town fund."),
-                        "interrupt": False, "sim_time": self.clock.hhmm,
-                    })
-                else:
-                    self.add_debt(a.name, config.TOWN_FUND, config.RENT_COST,
-                                  f"unpaid rent on {a.home}",
-                                  due_day=day + config.RENT_GRACE_DAYS)
-                    a.pending.append({
-                        "text": (f"Rent day — ${config.RENT_COST} due on "
-                                 f"{a.home} and you can't cover it. You're in "
-                                 f"the town ledger now; working a shift pays, "
-                                 f"and the pay action settles up."),
-                        "interrupt": True, "sim_time": self.clock.hhmm,
-                    })
-        # promise deadlines: silence past the due day is a public verdict
-        for pr in self.promises:
-            if pr["status"] == "open" and day > pr["due_day"]:
-                # grandfather clause: anything recorded under an older, looser
-                # statute that wouldn't qualify today lapses without verdict
-                if not self._is_money_promise(pr["text"].lower()):
-                    pr["status"] = "lapsed"
-                    continue
-                pr["status"] = "broken"
-                maker = self.agents.get(pr["maker"])
-                to = self.agents.get(pr["to"])
-                if to:
-                    to.relationships[pr["maker"]] = \
-                        to.relationships.get(pr["maker"], 0) - 3
-                    to.pending.append({
-                        "text": (f'{pr["maker"]} promised you money — '
-                                 f'"{pr["text"]}" — and the deadline passed in '
-                                 f"silence. That tells you who they are."),
-                        "interrupt": True, "sim_time": self.clock.hhmm,
-                    })
-                if maker:
-                    maker.pending.append({
-                        "text": (f"You never made good on what you told "
-                                 f'{pr["to"]} — "{pr["text"]}". Broken promises '
-                                 f"have a way of coming up in this town."),
-                        "interrupt": False, "sim_time": self.clock.hhmm,
-                    })
-                self.emit("world", None,
-                          f'a promise quietly expires: {pr["maker"]} told '
-                          f'{pr["to"]} "{pr["text"]}" and never followed through',
-                          maker.location if maker else "the plaza",
-                          deliver=False)
-        # the bank posts arrears — once per debt, town-wide
-        bank = self.bank_name()
-        if bank:
-            for d in self.debts:
-                if d["status"] == "open" and d["creditor"] == bank and \
-                        d["due_day"] is not None and day > d["due_day"] and \
-                        not d.get("noticed"):
-                    d["noticed"] = True
-                    self.emit("world", None,
-                              f"NOTICE from {bank}: {d['debtor']} is in arrears "
-                              f"— ${d['amount']:.0f} past due. The ledger "
-                              f"forgets nothing.", bank)
-                    for a in self.agents.values():
-                        a.pending.append({
-                            "text": (f"Posted at {bank} for all to see: "
-                                     f"{d['debtor']} is in arrears — "
-                                     f"${d['amount']:.0f} past due."),
-                            "interrupt": a.name == d["debtor"],
-                            "sim_time": self.clock.hhmm,
-                        })
+        self.ledger.morning_sweep()
+
+    def _wage_till_key(self, agent):
+        return self.ledger.wage_till_key(agent)
+
+    def _till_deposit(self, location, amount):
+        self.ledger.deposit(location, amount)
+
+    def _apply_to_debts(self, payer, payee, amount):
+        return self.ledger.apply_payment_to_debts(payer, payee, amount)
+
+    def _settle_promises_on_payment(self, payer, payee_name):
+        self.ledger.settle_promises_on_payment(payer, payee_name)
+
+    def _detect_promise(self, agent, target, norm, text):
+        self.ledger.detect_promise(agent, target, norm, text)
+
+    def _is_money_promise(self, norm):
+        return self.ledger.is_money_promise(norm)
 
     # ------------------------------------------------------------- events
     def emit(self, etype, agent, text, loc, target=None, deliver=True):
@@ -559,6 +339,16 @@ class World:
         return True, f"went to {dest}"
 
 
+    @staticmethod
+    def _echoes_own_recent(agent, toks):
+        """Paraphrase Act predicate: >50% Jaccard overlap with anything this
+        villager has said or sent recently is a reworded broken record."""
+        for old in agent.recent_own_says[-6:]:
+            union = toks | old
+            if union and len(toks & old) / len(union) > 0.5:
+                return True
+        return False
+
     def _verb_say(self, agent, action):
         text = _sanitize_speech((action.get("text") or "").strip())
         if not text:
@@ -588,14 +378,12 @@ class World:
                                "your OWN or act")
         # Paraphrase Act: rewording your own broken record is still a broken record
         toks = _toks(norm)
-        for old in agent.recent_own_says[-6:]:
-            union = toks | old
-            if union and len(toks & old) / len(union) > 0.5:
-                agent.activity = {"type": "idle", "until_tick": self.tick_no + 3,
-                                  "note": "realized they've been saying the same thing all day"}
-                return False, ("has been saying versions of that same thing over and "
-                               "over — everyone has stopped listening. Do something "
-                               "NEW: go somewhere else, text someone, take an action")
+        if self._echoes_own_recent(agent, toks):
+            agent.activity = {"type": "idle", "until_tick": self.tick_no + 3,
+                              "note": "realized they've been saying the same thing all day"}
+            return False, ("has been saying versions of that same thing over and "
+                           "over — everyone has stopped listening. Do something "
+                           "NEW: go somewhere else, text someone, take an action")
         # Soapbox Law: three speeches to an empty room is a cry for help
         audience = self.occupants(agent.location, exclude=agent.name)
         if not audience and not action.get("to"):
@@ -641,11 +429,9 @@ class World:
         if norm == agent.last_text:
             return False, "already sent exactly that text — sending it again helps no one"
         toks = _toks(norm)
-        for old in agent.recent_own_says[-6:]:
-            union = toks | old
-            if union and len(toks & old) / len(union) > 0.5:
-                return False, ("that text says the same thing they've been "
-                               "saying/sending all day — say something NEW or act")
+        if self._echoes_own_recent(agent, toks):
+            return False, ("that text says the same thing they've been "
+                           "saying/sending all day — say something NEW or act")
         to_raw = str(action.get("to") or "").strip().lower()
         gname = config.TOWN_NAME.lower()
         if to_raw in ("everyone", "all", "town", "the town", "group", "group chat",

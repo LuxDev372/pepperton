@@ -196,7 +196,7 @@ def _economy():
     w.execute(a, {"action": "text", "to": b.name,
                   "text": "About the rest — I owe you, I'll get you the money."})
     w.clock.day += config.PROMISE_GRACE_DAYS + 1
-    w._ledger_day_done = 0
+    w.ledger.swept_day = 0
     w.morning_ledger()
     broken = [p for p in w.promises if p["status"] == "broken"]
     check("silence breaks a promise", len(broken) == 1,
@@ -222,7 +222,7 @@ def _economy():
                        "text": "Thanks, I owe you one!", "day": w.clock.day,
                        "due_day": w.clock.day - 1, "status": "open"})
     rel_before = w.agents[b.name].relationships.get(a.name, 0)
-    w._ledger_day_done = 0
+    w.ledger.swept_day = 0
     w.morning_ledger()
     g = next(p for p in w.promises if p["id"] == 99)
     check("old idiom promises lapse without verdict",

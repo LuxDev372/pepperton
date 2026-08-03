@@ -42,7 +42,8 @@ async def agent(name: str):
 
 @app.post("/api/control/pause")
 async def pause():
-    engine.paused = not engine.paused
+    with engine.lock:
+        engine.paused = not engine.paused
     return {"paused": engine.paused}
 
 
