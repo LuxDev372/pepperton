@@ -33,7 +33,11 @@ async def state(since: int = 0):
 
 
 @app.get("/api/agent/{name}")
-async def agent(name: str):
+def agent(name: str):
+    # Deliberately sync (not async): engine.inspect waits up to two seconds
+    # on the tick lock, and inside an async handler that blocks uvicorn's
+    # whole event loop — every other request, the pause button included,
+    # queues behind it. A plain def runs in FastAPI's threadpool instead.
     data = engine.inspect(name)
     if data is None:
         return JSONResponse({"error": "no such villager"}, status_code=404)
@@ -42,8 +46,12 @@ async def agent(name: str):
 
 @app.post("/api/control/pause")
 async def pause():
-    with engine.lock:
-        engine.paused = not engine.paused
+    # Deliberately NOT under engine.lock. In live mode a tick holds that
+    # lock while the models think, so taking it here left Pause ignoring
+    # the operator for up to the Ollama timeout — worse than the benign
+    # race two simultaneous flips could cause. The loop reads the flag
+    # once per tick.
+    engine.paused = not engine.paused
     return {"paused": engine.paused}
 
 
@@ -63,17 +71,21 @@ async def recast(body: dict):
     host = body.get("host", "default")
     if host not in config.OLLAMA_HOSTS:
         return JSONResponse({"error": f"unknown host key {host!r}"}, status_code=400)
-    with engine.lock:
+    old = engine.world.agents[resolved].model
+
+    def apply():
         agent = engine.world.agents[resolved]
         core = OllamaBrain(model, host)
         core.understudy = MockBrain(resolved, engine.seed)
         engine.brains[resolved].understudy = core
-        old = agent.model
         agent.model, agent.host = model, host
-    engine.world.emit("world", None,
-                      f"(something subtle changes behind {resolved}'s eyes)",
-                      agent.location, deliver=False)
-    return {"recast": resolved, "was": old, "now": model, "host": host}
+        engine.world.emit("world", None,
+                          f"(something subtle changes behind {resolved}'s eyes)",
+                          agent.location, deliver=False)
+
+    engine.submit(apply, f"recast {resolved} -> {model}")
+    return {"recast": resolved, "was": old, "now": model, "host": host,
+            "queued": True}
 
 
 @app.post("/api/chaos")
@@ -81,9 +93,14 @@ async def chaos(body: dict = None):
     """Manually fire a Director event. Body: {"event": "stranger"} or empty
     for a random weighted roll. You are the god of this town; use it wisely."""
     name = (body or {}).get("event")
-    with engine.lock:
-        result = engine.director.trigger(name)
-    return {"happened": result}
+    known = set(config.CHAOS.get("weights", {}))
+    if name and name not in known:
+        return JSONResponse({"error": f"unknown event {name!r}",
+                             "known": sorted(known)}, status_code=400)
+    # Queued rather than fired inline: see Engine.submit. Whatever the
+    # Director decides shows up in the transcript a tick later.
+    engine.submit(lambda: engine.director.trigger(name), f"chaos {name or 'random'}")
+    return {"queued": True, "event": name or "a random roll"}
 
 
 # ---------------------------------------------------------------- possession
@@ -102,14 +119,14 @@ async def possess(name: str, body: dict):
     b = engine.brains.get(name)
     if not b:
         return JSONResponse({"error": "no such villager"}, status_code=404)
+    # Seat changes touch only the brain wrapper, never the world, so they
+    # apply immediately — the seat has to answer a click even mid-tick.
     if "possess" in body:
-        with engine.lock:
-            b.possessed = bool(body["possess"])
+        b.possessed = bool(body["possess"])
         return {"possessed": b.possessed}
     if "action" in body:
-        with engine.lock:
-            b.queued_action = body
-            b.possessed = True
+        b.queued_action = body
+        b.possessed = True
         return {"queued": True}
     return JSONResponse({"error": "send {'possess': bool} or an action"}, status_code=400)
 

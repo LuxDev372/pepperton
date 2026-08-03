@@ -5,7 +5,18 @@ fresh-world isolation, activity expiry (exact wages), crash-recovery
 memory reconciliation, and deterministic resume.
 """
 import os, shutil, sys
-sys.path.insert(0, ".")
+
+# Run inside a scratch directory, never the project root. fresh_data()
+# below does `rmtree("data")`, and the paths in config are relative — run
+# from the root while a town is live (or even just afterwards) and this
+# file deletes the saved world, its database and its transcripts. It has
+# done exactly that once. sys.path points at the real root so `import
+# config` still finds the real config.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRATCH = os.path.join(ROOT, ".selftest")
+sys.path.insert(0, ROOT)
+os.makedirs(SCRATCH, exist_ok=True)
+os.chdir(SCRATCH)
 os.environ.setdefault("PEPPERTON_TEST", "1")
 
 import config
