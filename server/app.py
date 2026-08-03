@@ -62,12 +62,13 @@ async def recast(body: dict):
     host = body.get("host", "default")
     if host not in config.OLLAMA_HOSTS:
         return JSONResponse({"error": f"unknown host key {host!r}"}, status_code=400)
-    agent = engine.world.agents[resolved]
-    core = OllamaBrain(model, host)
-    core.understudy = MockBrain(resolved, engine.seed)
-    engine.brains[resolved].understudy = core
-    old = agent.model
-    agent.model, agent.host = model, host
+    with engine.lock:
+        agent = engine.world.agents[resolved]
+        core = OllamaBrain(model, host)
+        core.understudy = MockBrain(resolved, engine.seed)
+        engine.brains[resolved].understudy = core
+        old = agent.model
+        agent.model, agent.host = model, host
     engine.world.emit("world", None,
                       f"(something subtle changes behind {resolved}'s eyes)",
                       agent.location, deliver=False)
@@ -79,7 +80,8 @@ async def chaos(body: dict = None):
     """Manually fire a Director event. Body: {"event": "stranger"} or empty
     for a random weighted roll. You are the god of this town; use it wisely."""
     name = (body or {}).get("event")
-    result = engine.director.trigger(name)
+    with engine.lock:
+        result = engine.director.trigger(name)
     return {"happened": result}
 
 
@@ -100,11 +102,13 @@ async def possess(name: str, body: dict):
     if not b:
         return JSONResponse({"error": "no such villager"}, status_code=404)
     if "possess" in body:
-        b.possessed = bool(body["possess"])
+        with engine.lock:
+            b.possessed = bool(body["possess"])
         return {"possessed": b.possessed}
     if "action" in body:
-        b.queued_action = body
-        b.possessed = True
+        with engine.lock:
+            b.queued_action = body
+            b.possessed = True
         return {"queued": True}
     return JSONResponse({"error": "send {'possess': bool} or an action"}, status_code=400)
 

@@ -85,6 +85,7 @@ class Engine:
         self.director = Director(self, self.seed)
         self.paused = False
         self.running = False
+        self.lock = threading.RLock()   # guards world/brains vs API threads
         self._thread = None
         self._reflected_day = 0
         if state:
@@ -444,7 +445,8 @@ class Engine:
             while self.running:
                 if not self.paused:
                     try:
-                        self.step()
+                        with self.lock:
+                            self.step()
                     except Exception:
                         # one bad tick must NEVER kill a town — log and live on
                         print(f"[ENGINE] tick {self.world.tick_no + 1} crashed "
@@ -465,6 +467,10 @@ class Engine:
 
     # ------------------------------------------------------------- state
     def snapshot(self, since_seq=0):
+        with self.lock:
+            return self._snapshot_locked(since_seq)
+
+    def _snapshot_locked(self, since_seq=0):
         w = self.world
         return {
             "town": config.TOWN_NAME,
@@ -496,6 +502,10 @@ class Engine:
         }
 
     def inspect(self, name):
+        with self.lock:
+            return self._inspect_locked(name)
+
+    def _inspect_locked(self, name):
         a = self.world.agents.get(name)
         if not a:
             return None

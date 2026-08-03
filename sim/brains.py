@@ -77,7 +77,6 @@ class OllamaBrain(BrainBase):
     def reflect(self, agent, day, day_memories):
         try:
             raw = self._chat(
-                prompts.system_prompt(agent, None) if False else
                 f"You are {agent.name}. Answer only with JSON.",
                 prompts.reflection_prompt(agent, day, day_memories),
             )

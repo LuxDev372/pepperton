@@ -723,7 +723,7 @@ function renderInspector(d) {
 ===================================================================== */
 const canvas = $("map");
 const ctx = canvas.getContext("2d");
-measureCtx = ctx;
+measureCtx = document.createElement("canvas").getContext("2d");
 let view = { scale: 1, ox: 0, oy: 0, dpr: 1, cssW: 0, cssH: 0 };
 
 function resize() {
