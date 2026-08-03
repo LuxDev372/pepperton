@@ -79,7 +79,11 @@ REST_RECOVERY = 4.0        # energy per tick while resting at home
 NAP_RECOVERY = 2.0         # energy per tick napping in the park
 MEAL_FULLNESS = 45         # fullness gained per meal
 MEAL_COST = 5              # dollars
-WAGE_PER_SHIFT_TICK = 4    # dollars per tick while working
+WAGE_PER_SHIFT_TICK = 2    # dollars per tick while working (a full shift ~$32
+                           # against ~$15/day of living costs — v1.x paid $4,
+                           # priced for a town where nobody worked; in the
+                           # closed-loop economy that drained every till by
+                           # day 2 and turned all payroll into IOUs)
 START_MONEY = (12, 30)     # uniform range at cast generation
 
 # Locations. Homes are added automatically, one per villager.
@@ -91,12 +95,55 @@ LOCATIONS = {
     "the library":      {"desc": "the town library — quiet, smells of old paper"},
     "the workshop":     {"desc": "a shared workshop on the edge of town"},
     "the Rusty Tap":    {"desc": "the town bar — dim, warm, a pool table nobody's level at", "bar": True},
+    f"First Bank of {TOWN_NAME}": {"desc": "the town bank — marble counter, one teller window, and a ledger that forgets nothing", "bank": True},
 }
 
 DRINK_COST = 4          # a beer at the Rusty Tap
 ROOM_COST = 8           # a night in the room above the Rusty Tap (for the homeless)
 TIPSY_TICKS = 8         # how long one drink keeps a villager loosened up
 DRUNK_AT = 3            # drinks within the window that tip candid into sloppy
+
+# ------------------------------------------------- the Invisible Hand (v2.0)
+# Money is a CLOSED LOOP. Every dollar spent at a business lands in that
+# business's till; wages are paid FROM the till. Public jobs (librarian,
+# gardener, artist, handyman) are paid from the town fund, which rent
+# replenishes. When a till can't make payroll, wages become DEBT the
+# business settles when cash comes in. Nobody prints money. (The Director
+# still can. The Director is not bound by economics.)
+ECONOMY = True              # False = old open-faucet economy (v1.x behavior)
+TILL_SEED = 60              # opening cash in each business till
+TOWN_FUND_SEED = 150        # opening balance of the town fund (pays public wages)
+TOWN_FUND = "the town fund"
+
+WAGE_DEBT_CAP = 40          # when a till's back-wage IOUs hit this, it stops
+                            # offering shifts until the business earns — real
+                            # businesses cut hours, they don't print IOUs forever
+
+RENT_COST = 6               # owed by every housed villager, each rent day
+RENT_EVERY_DAYS = 3         # rent falls due every N days (day 4, 7, 10, ...)
+RENT_GRACE_DAYS = 2         # unpaid rent becomes an overdue debt after this
+
+# First Bank: loans against your public reputation. Credit is computed from
+# the notice board (build shifts = collateral of character) and your debt
+# history. The teller window is open to anyone; the ledger forgets nothing.
+BANK_SEED = 200             # the bank's opening capital
+LOAN_INTEREST = 0.25        # flat interest on the whole loan
+LOAN_TERM_DAYS = 4          # repayment due N days after borrowing
+LOAN_MAX_GOOD = 30          # credit limit, solid reputation
+LOAN_MAX_SHAKY = 12         # credit limit, thin file
+CREDIT_GOOD_SHIFTS = 8      # build shifts on the board for "solid" credit
+
+# Promises: speech that creates obligation. When a villager SAYS or TEXTS a
+# payment promise to a specific person, the world writes it down. Any
+# payment to that person before the deadline keeps the promise; the
+# deadline passing in silence breaks it — and the town's memory of a
+# broken promise outlives the debt.
+PROMISE_PATTERNS = (
+    "i'll pay you back", "i will pay you back", "pay you back",
+    "i'll pay you", "i will pay you", "i owe you", "i'll settle up",
+    "i'll get you the money", "i'll get you your money",
+)
+PROMISE_GRACE_DAYS = 2
 
 # Overheard (untargeted) speech no longer interrupts everyone in the room —
 # it's still perceived, but only being directly addressed demands a response.
@@ -133,6 +180,7 @@ WORKPLACES = {
     "gardener":   "the park",
     "artist":     "the plaza",
     "bartender":  "the Rusty Tap",
+    "banker":     f"First Bank of {TOWN_NAME}",
     "retired":    None,
 }
 
@@ -156,6 +204,7 @@ ARCHETYPES = [
     {"job": "artist",     "traits": ["dramatic", "chronically broke", "finds meaning in everything"]},
     {"job": "retired",    "traits": ["opinionated", "was somebody once and mentions it", "generous with unsolicited advice"]},
     {"job": "bartender",  "traits": ["hears everything and repeats exactly the wrong parts", "pours with opinions", "closes whenever they feel like it"]},
+    {"job": "banker",     "traits": ["polite in a way that costs extra", "believes character is collateral", "remembers every dollar anyone has ever owed"]},
 ]
 
 QUIRKS = [

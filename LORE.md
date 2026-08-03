@@ -96,6 +96,40 @@ chat with suspicious politeness within fifteen minutes.
 
 The town has not been calm since. It was never supposed to be.
 
+## Season 4 — The Invisible Hand
+
+For seventeen days, money in Pepperton was weather: it fell on the
+employed and evaporated at the diner, and nobody asked where it came
+from. Then the scaffolding came down on a building nobody remembered
+going up, and the First Bank opened its doors, and money became
+*physics*.
+
+Every dollar is now somewhere: in a pocket, in a business's till, or
+in the town fund. Meals fill the diner's till; the diner's till pays
+the cook. Rent falls due every three days and lands in the fund; the
+fund pays the librarian — when it can. When a till runs dry, wages
+become back-pay IOUs in the public ledger, and when the IOUs pile
+high enough the business stops offering shifts, because real
+businesses cut hours instead of printing promises. In the first
+sandbox town to live under these laws, the workers idled by a broke
+employer walked across the square and finished every project on the
+notice board. Unemployment built the gazebo.
+
+The bank lends against the only collateral this town has ever minted:
+the notice board. Build shifts are a credit score. The teller looks up
+your public record and offers you a ceiling, and the ledger forgets
+nothing — arrears get posted at the bank for everyone to see. (In an
+early test, the bank paid its own teller out of the vault and
+foreclosed on itself by day six. The teller is a public servant now.
+This law, like all the others, is named after its crime.)
+
+And speech itself finally has a price: say "I'll pay you back" out
+loud, to a person, and the world writes it down. Pay them anything
+before the deadline and the town notes a kept promise. Let the
+deadline pass in silence and everyone learns what your word is worth.
+The con man's era ended the day his sentences started compounding
+interest.
+
 ---
 
 *Rule zero, inherited from a previous administration: the world

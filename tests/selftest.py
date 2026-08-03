@@ -122,6 +122,121 @@ def _extra():
     fresh_data()
 
 _extra()
+
+# ---- appended by v2.0: the Invisible Hand regression ----
+def _economy():
+    fresh_data()
+    e = Engine(seed=31)
+    w = e.world
+    ags = list(w.agents.values())
+    a, b = ags[0], ags[1]
+    bank = w.bank_name()
+
+    # money is CONSERVED: a closed loop, chaos off, over two sim-days
+    config.CHAOS["enabled"] = False
+    def total():
+        return round(sum(x.money for x in w.agents.values())
+                     + sum(w.tills.values()), 2)
+    t0 = total()
+    e.run_headless(192)
+    t1 = total()
+    check("money is conserved (closed loop)", abs(t0 - t1) < 0.01,
+          f"start ${t0} -> end ${t1}")
+    config.CHAOS["enabled"] = True
+
+    # meals land in the till
+    fresh_data()
+    e = Engine(seed=31); w = e.world
+    ags = list(w.agents.values()); a, b = ags[0], ags[1]
+    bank = w.bank_name()
+    a.location = "Rosie's Diner"; a.money = 20; a.needs["fullness"] = 40
+    till0 = w.tills["Rosie's Diner"]
+    ok, _ = w.execute(a, {"action": "eat"})
+    till_after = w.tills["Rosie's Diner"]
+    check("meals land in the till", ok and till_after == till0 + config.MEAL_COST,
+          f"till ${till0} -> ${till_after}")
+
+    # a dry till pays what it can and books the rest as back wages
+    a.job = "cook"; a.location = "Rosie's Diner"; a.money = 0
+    w.tills["Rosie's Diner"] = 1.0
+    w.pay_wage(a, 4)
+    owed = w.open_debts(creditor=a.name)
+    check("dry till books back wages", a.money == 1.0 and owed and
+          owed[0]["amount"] == 3.0,
+          f"paid ${a.money}, booked {owed[0]['amount'] if owed else 0}")
+    # ...and settles automatically when cash comes in
+    w.tills["Rosie's Diner"] = 10.0
+    w.settle_business_debts()
+    check("refilled till settles back wages", a.money == 4.0 and
+          not w.open_debts(creditor=a.name),
+          f"money now ${a.money}")
+
+    # person-to-person pay clears a ledger debt
+    b.location = a.location
+    w.add_debt(a.name, b.name, 6, "test debt")
+    a.money = 10; bmoney0 = b.money
+    ok, _ = w.execute(a, {"action": "pay", "to": b.name, "amount": 6})
+    check("pay settles person debts", ok and not w.open_debts(debtor=a.name)
+          and b.money == bmoney0 + 6,
+          f"a=${a.money}, b +${b.money - bmoney0}")
+
+    # promises: spoken debt is recorded, payment keeps it, silence breaks it
+    a.location = b.location = "the plaza"
+    w.execute(a, {"action": "say", "text": "I'll pay you back on Friday, I swear.",
+                  "to": b.name})
+    open_prom = [p for p in w.promises if p["status"] == "open"]
+    check("a spoken promise is recorded", len(open_prom) == 1,
+          f"{len(open_prom)} open promises")
+    a.money = 5
+    w.execute(a, {"action": "pay", "to": b.name, "amount": 2})
+    kept = [p for p in w.promises if p["status"] == "kept"]
+    check("payment keeps a promise", len(kept) == 1, "")
+    # a second promise, left to rot (texted from across town)
+    b.location = "the library"
+    w.execute(a, {"action": "text", "to": b.name,
+                  "text": "About the rest — I owe you, I'll get you the money."})
+    w.clock.day += config.PROMISE_GRACE_DAYS + 1
+    w._ledger_day_done = 0
+    w.morning_ledger()
+    broken = [p for p in w.promises if p["status"] == "broken"]
+    check("silence breaks a promise", len(broken) == 1,
+          f"{len(broken)} broken")
+
+    # the bank: thin credit is capped, loans move real money, ledger records
+    fresh_data()
+    e = Engine(seed=33); w = e.world
+    a = list(w.agents.values())[0]
+    bank = w.bank_name()
+    a.location = bank; a.money = 0
+    ok, why = w.execute(a, {"action": "borrow", "amount": 999})
+    check("thin credit is capped", not ok and "notice board" in why, why[:60])
+    ok, _ = w.execute(a, {"action": "borrow", "amount": 10})
+    debt = w.open_debts(debtor=a.name, creditor=bank)
+    check("loans move real money", ok and a.money == 10 and debt and
+          debt[0]["amount"] == round(10 * (1 + config.LOAN_INTEREST), 2),
+          f"money ${a.money}, owes {debt[0]['amount'] if debt else 0}")
+    ok, why = w.execute(a, {"action": "borrow", "amount": 5})
+    check("one loan at a time", not ok, why[:50])
+
+    # rent: charged on rent day, booked as debt for the broke
+    fresh_data()
+    e = Engine(seed=35); w = e.world
+    housed = [x for x in w.agents.values() if x.home][:2]
+    r1, r2 = housed[0], housed[1]
+    r1.money = 20; r2.money = 0
+    w.clock.day = config.RENT_EVERY_DAYS + 1   # a rent day
+    fund0 = w.tills[config.TOWN_FUND]
+    w.morning_ledger()
+    check("rent flows to the town fund", r1.money == 20 - config.RENT_COST and
+          w.tills[config.TOWN_FUND] >= fund0 + config.RENT_COST,
+          f"payer ${r1.money}, fund ${w.tills[config.TOWN_FUND]}")
+    rdebt = w.open_debts(debtor=r2.name, creditor=config.TOWN_FUND)
+    check("unpayable rent becomes debt", len(rdebt) == 1 and
+          rdebt[0]["amount"] == config.RENT_COST,
+          f"{len(rdebt)} rent debts")
+    fresh_data()
+
+_economy()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

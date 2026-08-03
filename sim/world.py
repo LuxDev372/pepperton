@@ -90,6 +90,21 @@ class World:
             {**p, "done": 0, "complete": False, "contributors": {}}
             for p in config.PROJECTS
         ]
+        # ------------- the Invisible Hand: closed-loop money (v2.0) -------------
+        # Every dollar is somewhere: in a pocket, in a till, or in the fund.
+        self.tills = {}
+        if getattr(config, "ECONOMY", False):
+            for k, v in self.locations.items():
+                if v.get("bank"):
+                    self.tills[k] = float(config.BANK_SEED)
+                elif v.get("sells_food") or v.get("bar"):
+                    self.tills[k] = float(config.TILL_SEED)
+            self.tills[config.TOWN_FUND] = float(config.TOWN_FUND_SEED)
+        self.debts = []      # {"id","debtor","creditor","amount","reason","day","due_day","status"}
+        self.promises = []   # {"id","maker","to","text","day","due_day","status"}
+        self._ledger_seq = 0
+        self._rent_day_done = 0
+        self._ledger_day_done = 0
         self._events_lock = threading.Lock()
         self._event_seq = 0
         os.makedirs("data", exist_ok=True)
@@ -112,6 +127,262 @@ class World:
             if v.get("radio"):
                 return k
         return None
+
+    def bank_name(self):
+        for k, v in self.locations.items():
+            if v.get("bank"):
+                return k
+        return None
+
+    # ----------------------------------------------------------- the ledger
+    def _till_deposit(self, loc, amount):
+        if getattr(config, "ECONOMY", False) and loc in self.tills:
+            self.tills[loc] += float(amount)
+
+    def add_debt(self, debtor, creditor, amount, reason, due_day=None, merge=False):
+        if merge:
+            for d in self.debts:
+                if d["status"] == "open" and d["debtor"] == debtor and \
+                        d["creditor"] == creditor and d["reason"] == reason:
+                    d["amount"] = round(d["amount"] + float(amount), 2)
+                    return d
+        self._ledger_seq += 1
+        d = {"id": self._ledger_seq, "debtor": debtor, "creditor": creditor,
+             "amount": round(float(amount), 2), "reason": reason,
+             "day": self.clock.day, "due_day": due_day, "status": "open"}
+        self.debts.append(d)
+        return d
+
+    def open_debts(self, debtor=None, creditor=None):
+        return [d for d in self.debts if d["status"] == "open"
+                and (debtor is None or d["debtor"] == debtor)
+                and (creditor is None or d["creditor"] == creditor)]
+
+    def _apply_to_debts(self, payer, payee, amount):
+        """Reduce payer->payee open debts, oldest first. Returns leftover."""
+        for d in self.debts:
+            if amount <= 0:
+                break
+            if d["status"] == "open" and d["debtor"] == payer and d["creditor"] == payee:
+                hit = min(amount, d["amount"])
+                d["amount"] = round(d["amount"] - hit, 2)
+                amount = round(amount - hit, 2)
+                if d["amount"] <= 0.01:
+                    d["amount"] = 0.0
+                    d["status"] = "paid"
+        return amount
+
+    def _settle_promises_on_payment(self, payer, payee_name):
+        """Any payment before the deadline keeps an open promise."""
+        for pr in self.promises:
+            if pr["status"] == "open" and pr["maker"] == payer.name and \
+                    pr["to"] == payee_name:
+                pr["status"] = "kept"
+                payer.relationships[payee_name] = \
+                    payer.relationships.get(payee_name, 0) + 2
+                payee = self.agents.get(payee_name)
+                if payee:
+                    payee.relationships[payer.name] = \
+                        payee.relationships.get(payer.name, 0) + 2
+                    payee.pending.append({
+                        "text": (f"{payer.name} said they'd pay you, and they "
+                                 f"actually did. A kept promise is rare currency."),
+                        "interrupt": False, "sim_time": self.clock.hhmm,
+                    })
+                self.emit("action", payer.name,
+                          f"kept their word to {payee_name}", payer.location,
+                          deliver=False)
+
+    def _detect_promise(self, agent, target, norm, text):
+        """Speech that creates obligation: the world writes payment promises
+        down, and the deadline passing in silence becomes public character."""
+        if not getattr(config, "ECONOMY", False) or not target:
+            return
+        if not any(p in norm for p in config.PROMISE_PATTERNS):
+            return
+        for pr in self.promises:
+            if pr["status"] == "open" and pr["maker"] == agent.name and \
+                    pr["to"] == target:
+                return   # one open promise per pair; talk is cheap, once
+        self._ledger_seq += 1
+        due = self.clock.day + config.PROMISE_GRACE_DAYS
+        self.promises.append({
+            "id": self._ledger_seq, "maker": agent.name, "to": target,
+            "text": text[:140], "day": self.clock.day, "due_day": due,
+            "status": "open",
+        })
+        agent.pending.append({
+            "text": (f"You just promised {target} money, out loud. The town "
+                     f"ledger has it now — pay them something by day {due} "
+                     f"(the pay action) or be known as a promise-breaker."),
+            "interrupt": False, "sim_time": self.clock.hhmm,
+        })
+
+    def _wage_till_key(self, agent):
+        """Which pot pays this villager. The bank's teller is paid from the
+        town fund — the bank's till is LOAN CAPITAL, not payroll (learned
+        the hard way: a bank that pays wages from its vault forecloses on
+        itself by day six)."""
+        wp = agent.workplace()
+        if not wp:
+            return config.TOWN_FUND
+        if self.locations.get(wp, {}).get("bank"):
+            return config.TOWN_FUND
+        return wp if wp in self.tills else config.TOWN_FUND
+
+    def wage_debt_of(self, till_key):
+        return sum(d["amount"] for d in self.debts
+                   if d["status"] == "open" and d["debtor"] == till_key)
+
+    def pay_wage(self, agent, wage):
+        """A shift-tick wage, paid FROM the employer's till (public jobs
+        draw on the town fund). Shortfalls become back-wage debt the
+        business settles automatically when cash comes in."""
+        if not getattr(config, "ECONOMY", False):
+            agent.money += wage
+            return
+        till_key = self._wage_till_key(agent)
+        avail = self.tills.get(till_key, 0.0)
+        paid = min(float(wage), max(0.0, avail))
+        if paid > 0:
+            self.tills[till_key] = round(avail - paid, 2)
+            agent.money += paid
+        short = round(float(wage) - paid, 2)
+        if short > 0:
+            d = self.add_debt(till_key, agent.name, short,
+                              f"back wages at {till_key}", merge=True)
+            if d["amount"] <= short + 0.01:   # first shortfall this stretch
+                agent.pending.append({
+                    "text": (f"The till at {till_key} couldn't cover your full "
+                             f"wage — the difference is on the books as back "
+                             f"pay. It'll come when business does."),
+                    "interrupt": False, "sim_time": self.clock.hhmm,
+                })
+
+    def settle_business_debts(self):
+        """Tills with cash pay their back-wage debts automatically."""
+        if not getattr(config, "ECONOMY", False):
+            return
+        for d in self.debts:
+            if d["status"] != "open" or d["debtor"] not in self.tills:
+                continue
+            till = self.tills.get(d["debtor"], 0.0)
+            if till <= 0:
+                continue
+            pay = round(min(till, d["amount"]), 2)
+            self.tills[d["debtor"]] = round(till - pay, 2)
+            d["amount"] = round(d["amount"] - pay, 2)
+            cred = self.agents.get(d["creditor"])
+            if cred:
+                cred.money += pay
+            if d["amount"] <= 0.01:
+                d["amount"] = 0.0
+                d["status"] = "paid"
+                if cred:
+                    cred.pending.append({
+                        "text": f"{d['debtor']} settled your back wages in full.",
+                        "interrupt": False, "sim_time": self.clock.hhmm,
+                    })
+
+    def credit_report(self, agent):
+        """(tier, limit, shifts) — the notice board IS the credit score."""
+        shifts = sum(p["contributors"].get(agent.name, 0)
+                     for p in self.projects)
+        mine = self.open_debts(debtor=agent.name)
+        overdue = [d for d in mine if d["due_day"] is not None
+                   and self.clock.day > d["due_day"]]
+        bank = self.bank_name()
+        if overdue:
+            return "bad", 0, shifts
+        if bank and self.open_debts(debtor=agent.name, creditor=bank):
+            return "extended", 0, shifts
+        if shifts >= config.CREDIT_GOOD_SHIFTS:
+            return "solid", config.LOAN_MAX_GOOD, shifts
+        return "thin", config.LOAN_MAX_SHAKY, shifts
+
+    def morning_ledger(self):
+        """The 08:00 sweep: rent falls due, promise deadlines are judged,
+        the bank posts arrears. Idempotent per day."""
+        if not getattr(config, "ECONOMY", False):
+            return
+        day = self.clock.day
+        if self._ledger_day_done >= day:
+            return
+        self._ledger_day_done = day
+        # rent day: every RENT_EVERY_DAYS, skipping day 1
+        if day > 1 and (day - 1) % config.RENT_EVERY_DAYS == 0 and \
+                self._rent_day_done < day:
+            self._rent_day_done = day
+            for a in self.agents.values():
+                if not a.home:
+                    continue
+                if a.money >= config.RENT_COST:
+                    a.money -= config.RENT_COST
+                    self.tills[config.TOWN_FUND] = round(
+                        self.tills.get(config.TOWN_FUND, 0.0) + config.RENT_COST, 2)
+                    a.pending.append({
+                        "text": (f"Rent day — ${config.RENT_COST} on {a.home}, "
+                                 f"paid to the town fund."),
+                        "interrupt": False, "sim_time": self.clock.hhmm,
+                    })
+                else:
+                    self.add_debt(a.name, config.TOWN_FUND, config.RENT_COST,
+                                  f"unpaid rent on {a.home}",
+                                  due_day=day + config.RENT_GRACE_DAYS)
+                    a.pending.append({
+                        "text": (f"Rent day — ${config.RENT_COST} due on "
+                                 f"{a.home} and you can't cover it. You're in "
+                                 f"the town ledger now; working a shift pays, "
+                                 f"and the pay action settles up."),
+                        "interrupt": True, "sim_time": self.clock.hhmm,
+                    })
+        # promise deadlines: silence past the due day is a public verdict
+        for pr in self.promises:
+            if pr["status"] == "open" and day > pr["due_day"]:
+                pr["status"] = "broken"
+                maker = self.agents.get(pr["maker"])
+                to = self.agents.get(pr["to"])
+                if to:
+                    to.relationships[pr["maker"]] = \
+                        to.relationships.get(pr["maker"], 0) - 3
+                    to.pending.append({
+                        "text": (f'{pr["maker"]} promised you money — '
+                                 f'"{pr["text"]}" — and the deadline passed in '
+                                 f"silence. That tells you who they are."),
+                        "interrupt": True, "sim_time": self.clock.hhmm,
+                    })
+                if maker:
+                    maker.pending.append({
+                        "text": (f"You never made good on what you told "
+                                 f'{pr["to"]} — "{pr["text"]}". Broken promises '
+                                 f"have a way of coming up in this town."),
+                        "interrupt": False, "sim_time": self.clock.hhmm,
+                    })
+                self.emit("world", None,
+                          f'a promise quietly expires: {pr["maker"]} told '
+                          f'{pr["to"]} "{pr["text"]}" and never followed through',
+                          maker.location if maker else "the plaza",
+                          deliver=False)
+        # the bank posts arrears — once per debt, town-wide
+        bank = self.bank_name()
+        if bank:
+            for d in self.debts:
+                if d["status"] == "open" and d["creditor"] == bank and \
+                        d["due_day"] is not None and day > d["due_day"] and \
+                        not d.get("noticed"):
+                    d["noticed"] = True
+                    self.emit("world", None,
+                              f"NOTICE from {bank}: {d['debtor']} is in arrears "
+                              f"— ${d['amount']:.0f} past due. The ledger "
+                              f"forgets nothing.", bank)
+                    for a in self.agents.values():
+                        a.pending.append({
+                            "text": (f"Posted at {bank} for all to see: "
+                                     f"{d['debtor']} is in arrears — "
+                                     f"${d['amount']:.0f} past due."),
+                            "interrupt": a.name == d["debtor"],
+                            "sim_time": self.clock.hhmm,
+                        })
 
     # ------------------------------------------------------------- events
     def emit(self, etype, agent, text, loc, target=None, deliver=True):
@@ -337,6 +608,7 @@ class World:
             self.emit("say", agent.name, text, agent.location, target=target)
             if target:
                 agent.relationships[target] = agent.relationships.get(target, 0) + 1
+                self._detect_promise(agent, target, norm, text)
             return True, f"said: {text}"
 
         if act == "text":
@@ -405,6 +677,7 @@ class World:
                 "interrupt": True,
                 "sim_time": self.clock.hhmm,
             })
+            self._detect_promise(agent, target, norm, text)
             return True, f"texted {target}: {text}"
 
         if act == "eat":
@@ -425,6 +698,7 @@ class World:
                                    f"meals cost ${config.MEAL_COST}). Working a "
                                    f"shift PAYS{home_hint}")
                 agent.money -= config.MEAL_COST
+                self._till_deposit(agent.location, config.MEAL_COST)
                 agent.needs["fullness"] = min(100, agent.needs["fullness"] + config.MEAL_FULLNESS)
                 agent.activity = {"type": "idle", "until_tick": self.tick_no + 2,
                                   "note": "digesting"}
@@ -532,6 +806,7 @@ class World:
                 return False, (f"wanted to treat {len(hungry)} people (${cost}) but "
                                f"only has ${agent.money:.0f}")
             agent.money -= cost
+            self._till_deposit(agent.location, cost)
             names = []
             for t2 in hungry:
                 t2.needs["fullness"] = min(100, t2.needs["fullness"] + config.MEAL_FULLNESS)
@@ -558,6 +833,7 @@ class World:
                           "checked their pockets and ordered a water", agent.location)
                 return False, f"couldn't cover a drink (${agent.money:.0f})"
             agent.money -= config.DRINK_COST
+            self._till_deposit(agent.location, config.DRINK_COST)
             agent.drink_ticks = [t for t in agent.drink_ticks
                                  if self.tick_no - t <= config.TIPSY_TICKS * 2]
             agent.drink_ticks.append(self.tick_no)
@@ -571,12 +847,150 @@ class World:
                           agent.location)
             return True, f"had a drink (-${config.DRINK_COST}, round {n})"
 
+        if act == "pay":
+            if not getattr(config, "ECONOMY", False):
+                return False, "the town has no ledger yet"
+            try:
+                amount = round(float(action.get("amount", 0)), 2)
+            except (TypeError, ValueError):
+                amount = 0
+            if amount <= 0:
+                return False, "offered to pay nothing, which is not paying"
+            if amount > agent.money:
+                return False, (f"tried to pay ${amount:.0f} but only has "
+                               f"${agent.money:.0f}")
+            to_raw = str(action.get("to") or "").strip().lower()
+            bank = self.bank_name()
+            inst = None
+            if "bank" in to_raw:
+                inst = bank
+            elif "fund" in to_raw or "town" in to_raw or "rent" in to_raw:
+                inst = config.TOWN_FUND
+            if inst:
+                owed = self.open_debts(debtor=agent.name, creditor=inst)
+                if not owed:
+                    return False, f"owes {inst} nothing right now"
+                agent.money -= amount
+                leftover = self._apply_to_debts(agent.name, inst, amount)
+                paid = round(amount - leftover, 2)
+                agent.money += leftover   # institutions don't take tips
+                till_key = inst if inst in self.tills else config.TOWN_FUND
+                self.tills[till_key] = round(
+                    self.tills.get(till_key, 0.0) + paid, 2)
+                cleared = not self.open_debts(debtor=agent.name, creditor=inst)
+                self.emit("action", agent.name,
+                          f"paid ${paid:.0f} to {inst}"
+                          + (" — debt CLEARED" if cleared else ""),
+                          agent.location)
+                return True, (f"paid {inst} ${paid:.0f}"
+                              + (" (all square)" if cleared
+                                 else f" (still owes "
+                                      f"${sum(d['amount'] for d in self.open_debts(debtor=agent.name, creditor=inst)):.0f})"))
+            target = self._resolve_agent(action.get("to"))
+            if not target or target == agent.name:
+                return False, (f"can't pay {action.get('to')!r} — pay a person "
+                               f"here with you, or 'the bank' / 'the town fund'")
+            tgt = self.agents[target]
+            if tgt.location != agent.location:
+                return False, (f"{target} isn't here — cash changes hands in "
+                               f"person")
+            agent.money -= amount
+            tgt.money += amount
+            leftover = self._apply_to_debts(agent.name, target, amount)
+            settled = round(amount - leftover, 2)
+            self._settle_promises_on_payment(agent, target)
+            if settled > 0:
+                agent.relationships[target] = \
+                    agent.relationships.get(target, 0) + 1
+                tgt.relationships[agent.name] = \
+                    tgt.relationships.get(agent.name, 0) + 2
+                note = (f"paid {target} ${amount:.0f}"
+                        + ("" if leftover <= 0
+                           else f" (${leftover:.0f} over the debt — call it interest)"))
+            else:
+                tgt.relationships[agent.name] = \
+                    tgt.relationships.get(agent.name, 0) + 2
+                note = f"pressed ${amount:.0f} into {target}'s hand"
+            tgt.pending.append({
+                "text": f"{agent.name} just handed you ${amount:.0f} in cash."
+                        + (" That squares what they owed you."
+                           if settled > 0 and not self.open_debts(debtor=agent.name, creditor=target)
+                           else ""),
+                "interrupt": False, "sim_time": self.clock.hhmm,
+            })
+            self.emit("action", agent.name, note, agent.location)
+            return True, note
+
+        if act == "borrow":
+            if not getattr(config, "ECONOMY", False):
+                return False, "there is no bank in this town yet"
+            bank = self.bank_name()
+            if not bank:
+                return False, "there is no bank in this town"
+            if agent.location != bank:
+                return False, f"loans are made at the teller window — that's {bank}"
+            try:
+                amount = round(float(action.get("amount", 0)), 2)
+            except (TypeError, ValueError):
+                amount = 0
+            if amount <= 0:
+                return False, "asked the teller for a loan of nothing"
+            tier, limit, shifts = self.credit_report(agent)
+            if tier == "bad":
+                return False, ("the teller pulled the ledger and found overdue "
+                               "debts. No new credit until the old ink dries — "
+                               "settle up first (the pay action)")
+            if tier == "extended":
+                return False, ("already carrying a bank loan — this bank does "
+                               "one at a time")
+            if amount > limit:
+                if limit == config.LOAN_MAX_SHAKY:
+                    return False, (f"the teller glanced at the notice board: "
+                                   f"{shifts} build shifts on public record. A "
+                                   f"thin file — the bank will go to ${limit}, "
+                                   f"not ${amount:.0f}. Build something and "
+                                   f"come back")
+                return False, f"the bank's ceiling is ${limit}, even for solid credit"
+            if self.tills.get(bank, 0.0) < amount:
+                return False, ("the bank itself is short on cash — come back "
+                               "when deposits recover")
+            self.tills[bank] = round(self.tills[bank] - amount, 2)
+            agent.money += amount
+            repay = round(amount * (1 + config.LOAN_INTEREST), 2)
+            due = self.clock.day + config.LOAN_TERM_DAYS
+            self.add_debt(agent.name, bank, repay,
+                          f"bank loan (${amount:.0f} plus interest)",
+                          due_day=due)
+            self.emit("action", agent.name,
+                      f"walked out of {bank} with a ${amount:.0f} loan — "
+                      f"${repay:.0f} due by day {due}", agent.location)
+            return True, (f"borrowed ${amount:.0f} (credit: {tier}; owes "
+                          f"${repay:.0f} by day {due})")
+
         if act == "work":
             wp = agent.workplace()
             if not wp:
                 return False, f"is {agent.job} and has no shift to work"
             if agent.location != wp:
                 return False, f"can't work here — their work is at {wp}"
+            if getattr(config, "ECONOMY", False):
+                till_key = self._wage_till_key(agent)
+                if self.tills.get(till_key, 0.0) <= 0 and \
+                        self.wage_debt_of(till_key) >= config.WAGE_DEBT_CAP:
+                    where = ("the town" if till_key == config.TOWN_FUND
+                             else till_key)
+                    agent.activity = {"type": "idle",
+                                      "until_tick": self.tick_no + 8,
+                                      "note": "sent home — no shifts today"}
+                    self.emit("action", agent.name,
+                              f"showed up for a shift and was sent home — "
+                              f"{where} can't make payroll", agent.location)
+                    return False, (f"no shifts today: {where}'s books are "
+                                   f"${self.wage_debt_of(till_key):.0f} in the "
+                                   f"red and the till is empty. No revenue, no "
+                                   f"wages — a business needs CUSTOMERS "
+                                   f"(or you need another way to earn: build "
+                                   f"goodwill, or see the bank)")
             agent.activity = {"type": "work", "until_tick": self.tick_no + 16,
                               "note": action.get("note", "")}
             self.emit("action", agent.name, f"started a shift at {wp}", wp)
@@ -592,6 +1006,7 @@ class World:
                                    f"a night and they've got ${agent.money:.0f} — "
                                    "the park bench is free")
                 agent.money -= config.ROOM_COST
+                self._till_deposit(agent.location, config.ROOM_COST)
                 agent.asleep = True
                 agent.activity = {"type": "rest", "until_tick": None, "note": "room"}
                 self.emit("action", agent.name,

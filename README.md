@@ -108,6 +108,21 @@ simulated life). Physics rejects the action and tells the model *why*,
 which becomes a memory, which changes behavior. Discipline through
 consequences, not prompt begging.
 
+## The economy (v2.0 — the Invisible Hand)
+
+Money is a closed loop: every dollar is in a pocket, a business till,
+or the town fund. Meals fill the diner's till; the till pays the
+cook's wages; rent (every 3 sim-days) refills the fund that pays the
+public workers. Dry tills issue back-pay IOUs into a public ledger,
+and businesses that can't make payroll stop offering shifts. The
+**First Bank** lends against the only credit score this town has —
+your build shifts on the notice board — and posts arrears publicly,
+because the ledger forgets nothing. Saying *"I'll pay you back"* out
+loud creates a recorded promise: keep it (the `pay` action) or the
+whole town learns what your word is worth. Nobody prints money.
+(The Director still can. The Director is not bound by economics.)
+`ECONOMY = False` in config restores the old open-faucet world.
+
 ## Phones & Pepperton_Gossip
 
 Villagers can text privately (unoverhearable — secrets finally travel)
@@ -144,7 +159,10 @@ from a parallel world).
 
 ## Roadmap-shaped ideas
 
-Spectator/broadcast mode (let chat vote on Director events), more
-archetypes and locations, strangers with deeper cover stories, Rosie.
+Persistent crises (storms that stay broken until someone fixes them),
+rumor mutation across retellings, forked-timeline experiments (the
+determinism is already there), spectator/broadcast mode (let chat vote
+on Director events), more archetypes and locations, strangers with
+deeper cover stories, Rosie.
 
 MIT licensed. Bring your own GPU and your own sickness.

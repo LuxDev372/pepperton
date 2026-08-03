@@ -593,7 +593,19 @@ function updateHeader(snap) {
   const mb = $("modebadge");
   mb.textContent = snap.mock ? "mock" : "live";
   mb.className = "badge " + (snap.mock ? "mock" : "live");
-  $("seedbadge").textContent = "seed " + (snap.seed == null ? "—" : snap.seed) + (snap.version ? " · v" + snap.version : "");
+  let seedTxt = "seed " + (snap.seed == null ? "—" : snap.seed) + (snap.version ? " · v" + snap.version : "");
+  if (snap.economy && snap.economy.tills) {
+    const t = snap.economy.tills;
+    const fund = Object.keys(t).find((k) => k.toLowerCase().includes("fund"));
+    const bank = Object.keys(t).find((k) => k.toLowerCase().includes("bank"));
+    const bits = [];
+    if (bank) bits.push("bank $" + Math.round(t[bank]));
+    if (fund) bits.push("fund $" + Math.round(t[fund]));
+    const nDebts = (snap.economy.debts || []).length;
+    if (nDebts) bits.push(nDebts + " debt" + (nDebts === 1 ? "" : "s"));
+    if (bits.length) seedTxt += " · " + bits.join(" · ");
+  }
+  $("seedbadge").textContent = seedTxt;
   const pb = $("pauseBtn");
   pb.textContent = snap.paused ? "Resume" : "Pause";
   pb.className = snap.paused ? "paused" : "";
@@ -691,6 +703,26 @@ function renderInspector(d) {
     h += '<div class="sect">Relationships</div>';
     for (const rn of relNames) {
       h += '<div class="rel"><b>' + esc(rn) + "</b><span>" + esc(rels[rn]) + "</span></div>";
+    }
+  }
+
+  const owes = d.debts_owed || [];
+  const owed = d.debts_owed_to_me || [];
+  const proms = d.promises || [];
+  if (owes.length || owed.length || proms.length) {
+    h += '<div class="sect">Ledger</div>';
+    for (const dd of owes) {
+      h += '<div class="rel"><b>owes ' + esc(dd.creditor) + "</b><span>$" +
+           Number(dd.amount).toFixed(0) +
+           (dd.due_day != null ? " · due d" + esc(dd.due_day) : "") + "</span></div>";
+    }
+    for (const dd of owed) {
+      h += '<div class="rel"><b>' + esc(dd.debtor) + " owes them</b><span>$" +
+           Number(dd.amount).toFixed(0) + "</span></div>";
+    }
+    for (const p of proms) {
+      h += '<div class="kv">🤝 ' + esc(p.maker) + " promised " + esc(p.to) +
+           " — due d" + esc(p.due_day) + "</div>";
     }
   }
 

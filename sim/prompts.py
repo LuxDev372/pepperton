@@ -15,13 +15,30 @@ VERBS = """Respond with ONLY a JSON object choosing ONE action:
   {"action": "build", "project": "<project from the notice board>"}   (real work, at the project's site — the whole town sees who actually builds)
   {"action": "propose", "project": "<short name for a NEW project>", "site": "<public place in town>", "work": <10-80 shifts>}   (post your own idea on the notice board — the town decides with their hammers)
   {"action": "work"}                     (only at your workplace)
-  {"action": "rest"}                     (at home to sleep, or nap in the park)
+__ECON_VERBS__  {"action": "rest"}                     (at home to sleep, or nap in the park)
   {"action": "idle", "note": "<what you do, third person, e.g. 'browses the shelves'>"}
 No prose outside the JSON. One action only.
 Never repeat something you have already said — the town notices and it gets you nowhere. If talking isn't working (or no one is there to hear you), DO something instead: go where the people are, work, investigate, act on your goal.
 NEVER announce that you will share/explain/reveal something later — say the actual thing NOW, with the actual details. Teasing an idea without stating it is the most annoying thing a person can do.
 If someone is in the room with you, TALK to them — phones are for people who are elsewhere."""
 VERBS = VERBS.replace("__GOSSIP__", f"{config.TOWN_NAME}_Gossip")
+_ECON_VERBS = (
+    '  {"action": "pay", "to": "<person here, or \'the bank\' / \'the town fund\'>", "amount": <dollars>}   (hand over REAL money — settles ledger debts, keeps promises)\n'
+    '  {"action": "borrow", "amount": <dollars>}   (at the bank only — a loan against your reputation; the notice board is your credit score)\n'
+)
+VERBS = VERBS.replace("__ECON_VERBS__",
+                      _ECON_VERBS if getattr(config, "ECONOMY", False) else "")
+
+
+def _econ_line():
+    if not getattr(config, "ECONOMY", False):
+        return ""
+    return (f"\nMoney in {config.TOWN_NAME} is REAL and it circulates: "
+            f"businesses pay wages out of their own tills, rent falls due "
+            f"every {config.RENT_EVERY_DAYS} days, debts go in the town "
+            f"ledger, and promising someone money OUT LOUD puts it in the "
+            f"ledger too — keep your word (the pay action) or the whole town "
+            f"learns what your word is worth.")
 
 
 def system_prompt(agent, world):
@@ -45,7 +62,7 @@ You are a real person in a real town, not an assistant. Stay in character: have 
 {config.TOWN_VOICE}
 Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You have NO home here — your options are the park bench (free) or paying ${config.ROOM_COST}/night for the room above the Rusty Tap. A home of your own would take the town building one (housing can be proposed on the notice board).'} Your workplace: {agent.workplace() or ('none — you are new in town' if agent.is_stranger else 'none — you are retired from all that')}.
 The people of {config.TOWN_NAME} (you know everyone; these exact names are your phone contacts): {roster}.
-You earn money by working, meals cost money, and you must eat and sleep. If you say things that are false, your neighbors will notice reality disagrees with you.
+You earn money by working, meals cost money, and you must eat and sleep. If you say things that are false, your neighbors will notice reality disagrees with you.{_econ_line()}
 
 {VERBS}"""
 
@@ -131,17 +148,51 @@ def decision_prompt(agent, world, perceptions, memories):
                       "Unless something is genuinely urgent, go home and rest — "
                       "whatever this is will still be here in the morning.")
     wp = agent.workplace()
+    bank = world.bank_name() if hasattr(world, "bank_name") else None
     if agent.money < config.MEAL_COST:
+        bank_bit = ""
+        if bank and getattr(config, "ECONOMY", False):
+            tier, limit, _ = world.credit_report(agent)
+            if limit > 0:
+                bank_bit = (f" {bank} would lend you up to ${limit} against "
+                            f"your record (borrow action, at the bank) — but "
+                            f"loans come due, with interest.")
         money_tag = (f" (BROKE. Building pays NOTHING — it's volunteer work. "
-                     f"{'Your job at ' + wp + ' PAYS real wages; go work a shift.' if wp else 'You need paid work or someone generous.'})")
+                     f"{'Your job at ' + wp + ' PAYS real wages; go work a shift.' if wp else 'You need paid work or someone generous.'}{bank_bit})")
     elif agent.money < 3 * config.MEAL_COST:
         money_tag = (" (running low — remember building is unpaid; "
                      + (f"your job at {wp} is what pays" if wp else "paid work is what pays") + ")")
     else:
         money_tag = ""
+    ledger_note = ""
+    if getattr(config, "ECONOMY", False) and hasattr(world, "open_debts"):
+        bits = []
+        for d in world.open_debts(debtor=agent.name)[:3]:
+            due = ""
+            if d["due_day"] is not None:
+                due = (", OVERDUE — settle it or your credit is dead"
+                       if world.clock.day > d["due_day"]
+                       else f", due day {d['due_day']}")
+            bits.append(f"you OWE {d['creditor']} ${d['amount']:.0f} "
+                        f"({d['reason']}{due})")
+        for d in world.open_debts(creditor=agent.name)[:3]:
+            if d["debtor"] in world.agents:
+                bits.append(f"{d['debtor'].split()[0]} owes YOU "
+                            f"${d['amount']:.0f} ({d['reason']}) — you may "
+                            f"want to bring that up")
+            else:
+                bits.append(f"{d['debtor']} owes you ${d['amount']:.0f} in "
+                            f"back wages (it pays out as their till refills)")
+        for p in world.promises:
+            if p["status"] == "open" and p["maker"] == agent.name:
+                bits.append(f"you PROMISED {p['to'].split()[0]} money, on the "
+                            f"record — pay them something by day {p['due_day']} "
+                            f"or the town learns what your word is worth")
+        if bits:
+            ledger_note = "\nThe ledger (public record): " + "; ".join(bits) + "."
     return f"""It is {world.clock.label}. You are at {agent.location} ({world.locations[agent.location].get('desc', '')}).{drink_note}{night_note}
 Here with you: {people}.{rel_note}
-Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.
+Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.{ledger_note}
 You were doing: {activity}.
 
 The town notice board (public — everyone sees who builds and who doesn't. Building is VOLUNTEER work: it pays $0 and glory; jobs pay money. A person needs both):

@@ -182,8 +182,30 @@ class MockBrain(BrainBase):
                 return {"action": "rest"}, "", "mock: exhausted"
             return {"action": "move", "to": bed}, "", "mock: exhausted, heading to rest"
 
+        # settle a debt when the creditor is standing right here (mock virtue)
+        if getattr(config, "ECONOMY", False) and hasattr(world, "open_debts"):
+            for d in world.open_debts(debtor=agent.name):
+                cred = world.agents.get(d["creditor"])
+                if cred and cred.location == agent.location and \
+                        not cred.asleep and agent.money >= d["amount"] > 0 and \
+                        self.rng.random() < 0.5:
+                    return ({"action": "pay", "to": d["creditor"],
+                             "amount": d["amount"]},
+                            "", "mock: settling a debt")
+            # broke and at the bank: ask the teller
+            bank = world.bank_name()
+            if bank and agent.location == bank and \
+                    agent.money < config.MEAL_COST:
+                return ({"action": "borrow", "amount": 10},
+                        "", "mock: asking for a loan")
+
         # work a shift in the morning if we have a job and aren't there yet
         wp = agent.workplace()
+        if wp and getattr(config, "ECONOMY", False) and hasattr(world, "_wage_till_key"):
+            tk = world._wage_till_key(agent)
+            if world.tills.get(tk, 0.0) <= 0 and \
+                    world.wage_debt_of(tk) >= config.WAGE_DEBT_CAP:
+                wp = None   # no payroll there — do something else with the day
         if wp and 8 * 60 <= clock.minutes < 12 * 60 and (agent.activity or {}).get("type") != "work":
             if agent.location != wp:
                 return {"action": "move", "to": wp}, "", "mock: off to work"

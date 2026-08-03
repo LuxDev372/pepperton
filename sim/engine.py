@@ -51,7 +51,8 @@ VERSION = _read_version()
 _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "location", "money", "pantry", "needs", "asleep", "activity",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
-                 "last_say", "last_text", "soapbox", "last_decision_tick"]
+                 "last_say", "last_text", "soapbox", "last_decision_tick",
+                 "pending", "urgent_flag"]
 
 
 class Engine:
@@ -123,6 +124,21 @@ class Engine:
             w.clock.minutes = state["minutes"]
             w.locations = state["locations"]
             w.projects = state["projects"]
+            # merge in locations added by newer versions (e.g. the bank):
+            # an old town wakes up and there's a new building on the square
+            new_locs = [k for k in config.LOCATIONS if k not in w.locations]
+            for k in new_locs:
+                w.locations[k] = dict(config.LOCATIONS[k])
+            # the ledger: restore if saved; a pre-2.0 town gets fresh seeds
+            first_economy_boot = getattr(config, "ECONOMY", False) and \
+                "tills" not in state
+            w.recent_says = [tuple(x) for x in state.get("recent_says", [])]
+            w.tills.update(state.get("tills", {}))
+            w.debts = state.get("debts", [])
+            w.promises = state.get("promises", [])
+            w._ledger_seq = state.get("ledger_seq", 0)
+            w._rent_day_done = state.get("rent_day_done", 0)
+            w._ledger_day_done = state.get("ledger_day_done", 0)
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
@@ -152,6 +168,27 @@ class Engine:
                    f"{config.TOWN_NAME} continues. (Day {w.clock.day} — the town "
                    f"survived an upgrade; nobody noticed a thing.)",
                    "the plaza", deliver=False)
+            if first_economy_boot:
+                bank = w.bank_name()
+                if bank:
+                    w.emit("world", None,
+                           f"Overnight, scaffolding came down nobody remembers "
+                           f"going up: {bank} has opened its doors. Money is "
+                           f"different now — businesses pay from their tills, "
+                           f"rent falls due every {config.RENT_EVERY_DAYS} days, "
+                           f"and the bank makes loans against your public record.",
+                           bank)
+                    for a in w.agents.values():
+                        a.pending.append({
+                            "text": (f"There is a BANK in town now — {bank}, "
+                                     f"open for business. Loans against your "
+                                     f"notice-board record (borrow, at the "
+                                     f"bank), debts in a ledger, rent every "
+                                     f"{config.RENT_EVERY_DAYS} days. The "
+                                     f"economy is real now."),
+                            "interrupt": False,
+                            "sim_time": w.clock.hhmm,
+                        })
         else:
             for a in cast:
                 self._remember(a, "genesis",
@@ -197,6 +234,13 @@ class Engine:
             "reflected_day": self._reflected_day,
             "strangers_added": self.director.strangers_added,
             "radio_dead_day": self.radio.dead_day,
+            "recent_says": [list(t) for t in self.world.recent_says],
+            "tills": self.world.tills,
+            "debts": self.world.debts,
+            "promises": self.world.promises,
+            "ledger_seq": self.world._ledger_seq,
+            "rent_day_done": self.world._rent_day_done,
+            "ledger_day_done": self.world._ledger_day_done,
         }
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -271,7 +315,7 @@ class Engine:
             if (agent.activity or {}).get("type") == "nap":
                 agent.needs["energy"] = min(100, agent.needs["energy"] + config.NAP_RECOVERY)
             if (agent.activity or {}).get("type") == "work":
-                agent.money += config.WAGE_PER_SHIFT_TICK
+                self.world.pay_wage(agent, config.WAGE_PER_SHIFT_TICK)
             if (agent.activity or {}).get("type") == "build":
                 proj = self.world.find_project(agent.activity.get("project"))
                 if proj is None:
@@ -389,6 +433,10 @@ class Engine:
         self.world.clock.tick()
         self.radio.maybe_broadcast(self.world)
         self.director.step()
+        if getattr(config, "ECONOMY", False):
+            self.world.settle_business_debts()
+            if self.world.clock.at("08:00"):
+                self.world.morning_ledger()
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
@@ -526,6 +574,11 @@ class Engine:
                 for p in w.projects
             ],
             "events": [e for e in w.events if e["seq"] > since_seq][-120:],
+            "economy": ({
+                "tills": {k: round(v, 2) for k, v in w.tills.items()},
+                "debts": [d for d in w.debts if d["status"] == "open"][-20:],
+                "promises": [p for p in w.promises if p["status"] == "open"][-10:],
+            } if getattr(config, "ECONOMY", False) else None),
         }
 
     def inspect(self, name):
@@ -549,4 +602,9 @@ class Engine:
             "last_reply": a.last_reply,
             "memory_count": self.memory.count(name),
             "recent_memories": self.memory.recent(name, 20),
+            "debts_owed": self.world.open_debts(debtor=name),
+            "debts_owed_to_me": self.world.open_debts(creditor=name),
+            "promises": [p for p in self.world.promises
+                         if p["status"] == "open" and
+                         name in (p["maker"], p["to"])],
         }
