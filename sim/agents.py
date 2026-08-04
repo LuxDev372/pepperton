@@ -18,6 +18,7 @@ class Agent:
         self.location = home
         self.money = 0
         self.pantry = 3     # home servings per day; restocked overnight
+        self.possessions = []   # goods bought with earned money (v2.5)
         self.last_say = ""  # repetition guard
         self.recent_own_says = []   # token sets of recent lines (Paraphrase Act)
         self.last_text = ""         # repetition guard for SMS
@@ -68,6 +69,7 @@ class Agent:
             "money": round(self.money, 1),
             "needs": {k: round(v, 1) for k, v in self.needs.items()},
             "activity": (self.activity or {}).get("type"),
+            "possessions": list(self.possessions),
         }
 
 

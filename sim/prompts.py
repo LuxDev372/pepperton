@@ -15,7 +15,8 @@ VERBS = """Respond with ONLY a JSON object choosing ONE action:
   {"action": "build", "project": "<project from the notice board>"}   (real work, at the project's site — the whole town sees who actually builds)
   {"action": "propose", "project": "<short name for a NEW project>", "site": "<public place in town>", "work": <10-80 shifts>}   (post your own idea on the notice board — the town decides with their hammers)
   {"action": "work"}                     (only at your workplace)
-__ECON_VERBS__  {"action": "rest"}                     (at home to sleep, or nap in the park)
+__ECON_VERBS__  {"action": "buy", "item": "<something sold where you are>"}   (own things — the store window shows what's for sale)
+  {"action": "rest"}                     (at home to sleep, or nap in the park)
   {"action": "idle", "note": "<what you do, third person, e.g. 'browses the shelves'>"}
 No prose outside the JSON. One action only.
 Never repeat something you have already said — the town notices and it gets you nowhere. If talking isn't working (or no one is there to hear you), DO something instead: go where the people are, work, investigate, act on your goal.
@@ -28,6 +29,14 @@ _ECON_VERBS = (
 )
 VERBS = VERBS.replace("__ECON_VERBS__",
                       _ECON_VERBS if getattr(config, "ECONOMY", False) else "")
+
+
+def _owns_line(agent):
+    owned = getattr(agent, "possessions", [])
+    if not owned:
+        return ""
+    return (f" You own: {', '.join(owned)} — comforts you worked for; "
+            f"let them show.")
 
 
 def _inn_bit(world):
@@ -74,7 +83,7 @@ What's driving you lately: {agent.goal}.
 
 You are a real person in a real town, not an assistant. Stay in character: have opinions, hold grudges, pursue what you want. Keep speech to one or two natural sentences.
 {config.TOWN_VOICE}
-Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You have NO home here — your options are the park bench (free), paying ${config.ROOM_COST}/night for the room above the Rusty Tap{_inn_bit(world)}. A home of your own would take the town building one (housing — or an inn with beds for everyone — can be proposed on the notice board).'} Your workplace: {agent.workplace() or ('none — you are new in town' if agent.is_stranger else 'none — you are retired from all that')}.
+Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You have NO home here — your options are the park bench (free), paying ${config.ROOM_COST}/night for the room above the Rusty Tap{_inn_bit(world)}. A home of your own would take the town building one (housing — or an inn with beds for everyone — can be proposed on the notice board).'} Your workplace: {agent.workplace() or ('none — you are new in town' if agent.is_stranger else 'none — you are retired from all that')}.{_owns_line(agent)}
 The people of {config.TOWN_NAME} (you know everyone; these exact names are your phone contacts): {roster}.
 You earn money by working, meals cost money, and you must eat and sleep. If you say things that are false, your neighbors will notice reality disagrees with you.{_econ_line()}
 
@@ -191,6 +200,22 @@ def decision_prompt(agent, world, perceptions, memories):
                      + (f"your job at {wp} is what pays" if wp else "paid work is what pays") + ")")
     else:
         money_tag = ""
+        if agent.money >= 30 and hasattr(world, "goods_catalog"):
+            unowned = [k for k, v in world.goods_catalog().items()
+                       if not v.get("consumable")
+                       and k not in getattr(agent, "possessions", [])]
+            if unowned:
+                money_tag = (" (comfortable — money can become a life: "
+                             f"{unowned[0]} is ${world.goods_catalog()[unowned[0]]['cost']} "
+                             f"at {world.goods_catalog()[unowned[0]]['sold_at']})")
+    shop_note = ""
+    if hasattr(world, "goods_sold_here"):
+        here_goods = world.goods_sold_here(agent.location)
+        if here_goods:
+            shop_note = ("\nFor sale here: " + "; ".join(
+                f"{k} (${v['cost']}) — {v['pitch']}"
+                for k, v in here_goods.items()) +
+                ". (the buy action, if you've earned it)")
     ledger_note = ""
     if getattr(config, "ECONOMY", False) and hasattr(world, "open_debts"):
         bits = []
@@ -219,7 +244,7 @@ def decision_prompt(agent, world, perceptions, memories):
             ledger_note = "\nThe ledger (public record): " + "; ".join(bits) + "."
     return f"""It is {world.clock.label}. You are at {agent.location} ({world.locations[agent.location].get('desc', '')}).{drink_note}{night_note}
 Here with you: {people}.{rel_note}
-Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.{ledger_note}
+Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.{ledger_note}{shop_note}
 You were doing: {activity}.
 
 The town notice board (public — everyone sees who builds and who doesn't. Building is VOLUNTEER work: it pays $0 and glory; jobs pay money. A person needs both):

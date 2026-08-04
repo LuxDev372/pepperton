@@ -128,6 +128,62 @@ class World:
                 return k
         return None
 
+    # ------------------------------------------------ goods (v2.5)
+    @staticmethod
+    def goods_catalog():
+        return getattr(config, "GOODS", {
+            "a proper mattress": {"cost": 25, "sold_at": "Pepper & Sons",
+                "pitch": "sleep like the righteous — rest at home recovers faster"},
+            "carpenter's tools": {"cost": 20, "sold_at": "Pepper & Sons",
+                "pitch": "arrive at any build site ready — your first swing counts double"},
+            "a fine hat": {"cost": 15, "sold_at": "Pepper & Sons",
+                "pitch": "people notice a hat like this"},
+            "a pocket watch": {"cost": 30, "sold_at": "Pepper & Sons",
+                "pitch": "the quiet signal of a person whose time matters"},
+            "a paperback novel": {"cost": 6, "sold_at": "Pepper & Sons",
+                "pitch": "something to be mid-way through; lends itself to conversation"},
+            "a coffee": {"cost": 2, "sold_at": "Rosie's Diner",
+                "consumable": True,
+                "pitch": "hot, immediate, and cheaper than a meal"},
+        })
+
+    def goods_sold_here(self, location):
+        return {k: v for k, v in self.goods_catalog().items()
+                if v.get("sold_at") == location}
+
+    def _verb_buy(self, agent, action):
+        wanted = str(action.get("item") or "").strip().lower()
+        if not wanted:
+            return False, "reached for their wallet, forgot what for"
+        catalog = self.goods_catalog()
+        item = next((k for k in catalog if wanted in k.lower()
+                     or k.lower() in wanted), None)
+        if item is None:
+            names = ", ".join(catalog)
+            return False, f"nobody sells {action.get('item')!r} — the catalogs of this town: {names}"
+        spec = catalog[item]
+        if agent.location != spec["sold_at"]:
+            return False, f"{item} is sold at {spec['sold_at']} — that's where the counter is"
+        cost = spec["cost"]
+        if agent.money < cost:
+            return False, (f"{item} costs ${cost} and they have "
+                           f"${agent.money:.0f} — something to work toward")
+        if not spec.get("consumable") and item in agent.possessions:
+            return False, f"already owns {item} — one is plenty"
+        agent.money -= cost
+        self._till_deposit(agent.location, cost)
+        if spec.get("consumable"):
+            agent.needs["energy"] = min(100, agent.needs["energy"] + 12)
+            self.emit("action", agent.name,
+                      f"ordered {item} at the counter (-${cost})",
+                      agent.location)
+            return True, f"had {item} (-${cost}) — feeling sharper"
+        agent.possessions.append(item)
+        self.emit("action", agent.name,
+                  f"bought {item} at {agent.location} (-${cost}) — "
+                  f"earned money, spent well", agent.location)
+        return True, f"bought {item} (-${cost}); it's theirs now"
+
     # -------------------------------------------------- permits (v2.4)
     @staticmethod
     def permit_window(work):
@@ -654,8 +710,15 @@ class World:
                            "you have to actually BE there to swing a hammer")
         agent.activity = {"type": "build", "project": proj["name"],
                           "until_tick": self.tick_no + 8}
+        tooled = "carpenter's tools" in agent.possessions
+        if tooled:
+            proj["done"] += 1
+            proj["contributors"][agent.name] = \
+                proj["contributors"].get(agent.name, 0) + 1
         self.emit("action", agent.name,
-                  f"rolled up their sleeves and got to work on {proj['name']}",
+                  f"rolled up their sleeves and got to work on {proj['name']}"
+                  + (" — own tools, first swing counts double" if tooled
+                     else ""),
                   agent.location)
         return True, f"working on {proj['name']} ({proj['done']}/{proj['work']})"
 
@@ -1015,6 +1078,7 @@ class World:
         "eat": _verb_eat, "build": _verb_build, "propose": _verb_propose,
         "treat": _verb_treat, "drink": _verb_drink, "pay": _verb_pay,
         "borrow": _verb_borrow, "work": _verb_work, "rest": _verb_rest,
+        "buy": _verb_buy,
     }
 
     def execute(self, agent, action):

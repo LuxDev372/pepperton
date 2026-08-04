@@ -790,6 +790,13 @@ function renderInspector(d) {
   h += needBar("energy", needs.energy, "#7dc4a0");
   h += needBar("fullness", needs.fullness, "#e0a458");
 
+  const owns = d.possessions || [];
+  if (owns.length) {
+    h += '<div class="sect">Owns</div><div class="tagrow">';
+    for (const o of owns) h += '<span class="tag">' + esc(o) + "</span>";
+    h += "</div>";
+  }
+
   h += '<div class="sect">Character</div>';
   h += '<div class="tagrow">';
   for (const t of d.traits || []) h += '<span class="tag">' + esc(t) + "</span>";

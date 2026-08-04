@@ -52,7 +52,7 @@ _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "location", "money", "pantry", "needs", "asleep", "activity",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
                  "last_say", "last_text", "soapbox", "last_decision_tick",
-                 "pending", "urgent_flag"]
+                 "pending", "urgent_flag", "possessions"]
 
 
 def _mock_with_rng(brain):
@@ -329,7 +329,11 @@ class Engine:
     def _apply_needs(self, agent):
         was_urgent = set(agent.urgent_needs())
         if agent.asleep:
-            agent.needs["energy"] = min(100, agent.needs["energy"] + config.REST_RECOVERY)
+            recovery = config.REST_RECOVERY
+            if "a proper mattress" in getattr(agent, "possessions", []) and \
+                    agent.location == agent.home:
+                recovery += 1.5   # creature comforts: the mattress pays off
+            agent.needs["energy"] = min(100, agent.needs["energy"] + recovery)
             agent.needs["fullness"] = max(0, agent.needs["fullness"] - config.NEEDS["fullness"]["decay"] * 0.4)
         else:
             for k, v in config.NEEDS.items():

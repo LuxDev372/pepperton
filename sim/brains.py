@@ -297,6 +297,17 @@ class MockBrain(BrainBase):
                     return ({"action": "pay", "to": d["creditor"],
                              "amount": d["amount"]},
                             "", "mock: settling a debt")
+            # the comfortable buy themselves something, once in a while
+            if hasattr(world, "goods_sold_here") and agent.money > 35 and \
+                    self.rng.random() < 0.08:
+                here = world.goods_sold_here(agent.location)
+                afford = [k for k, v in here.items()
+                          if agent.money >= v["cost"]
+                          and (v.get("consumable")
+                               or k not in agent.possessions)]
+                if afford:
+                    return ({"action": "buy", "item": afford[0]},
+                            "", "mock: treating themselves")
             # the comfortable drop a five in the jar now and then
             box = getattr(config, "POOR_BOX", "the poor box")
             if box in world.tills and agent.money > 40 and \

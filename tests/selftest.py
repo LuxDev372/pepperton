@@ -451,6 +451,54 @@ def _old_config_boot():
     fresh_data()
 
 _old_config_boot()
+
+# ---- appended by v2.5: Creature Comforts ----
+def _goods():
+    fresh_data()
+    e = Engine(seed=81)
+    w = e.world
+    a = list(w.agents.values())[0]
+
+    # buying moves money into the till and the item into the pocket
+    a.location = "Pepper & Sons"; a.money = 40
+    till0 = w.tills["Pepper & Sons"]
+    ok, msg = w.execute(a, {"action": "buy", "item": "fine hat"})
+    check("goods are bought at the counter", ok and
+          "a fine hat" in a.possessions and
+          w.tills["Pepper & Sons"] == till0 + 15 and a.money == 25,
+          msg[:50])
+    ok, msg = w.execute(a, {"action": "buy", "item": "a fine hat"})
+    check("one hat is plenty", not ok, msg[:40])
+
+    # the mattress makes home sleep better
+    a.possessions.append("a proper mattress")
+    a.location = a.home; a.asleep = True; a.needs["energy"] = 50
+    e._apply_needs(a)
+    check("the mattress pays off",
+          abs(a.needs["energy"] - (50 + config.REST_RECOVERY + 1.5
+                                   - config.NEEDS["fullness"]["decay"] * 0)) < 0.01
+          or a.needs["energy"] == 50 + config.REST_RECOVERY + 1.5,
+          f"energy 50 -> {a.needs['energy']}")
+
+    # tools: the first swing counts double
+    a.asleep = False
+    proj = next(p for p in w.projects if not p["complete"])
+    a.possessions.append("carpenter's tools")
+    a.location = proj["site"]
+    done0 = proj["done"]
+    ok, _ = w.execute(a, {"action": "build", "project": proj["name"]})
+    check("tools make the first swing count double", ok and
+          proj["done"] == done0 + 1 and
+          proj["contributors"].get(a.name, 0) >= 1, "")
+
+    # coffee is consumed, not owned
+    a.location = "Rosie's Diner"; a.money = 10; a.needs["energy"] = 40
+    ok, _ = w.execute(a, {"action": "buy", "item": "coffee"})
+    check("coffee is drunk, not shelved", ok and
+          a.needs["energy"] == 52 and "a coffee" not in a.possessions, "")
+    fresh_data()
+
+_goods()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

@@ -196,6 +196,25 @@ ROOM_COST = 8           # a night in the room above the Rusty Tap (for the homel
 TIPSY_TICKS = 8         # how long one drink keeps a villager loosened up
 DRUNK_AT = 3            # drinks within the window that tip candid into sloppy
 
+# Creature Comforts (v2.5): the carrot half of the incentive state. Money
+# can finally BECOME something — goods sold at real counters, paid into
+# real tills, with effects a villager (and the town) can see. Durables
+# are owned once; "consumable" items are used on the spot.
+GOODS = {
+    "a proper mattress": {"cost": 25, "sold_at": "Pepper & Sons",
+        "pitch": "sleep like the righteous — rest at home recovers faster"},
+    "carpenter's tools": {"cost": 20, "sold_at": "Pepper & Sons",
+        "pitch": "arrive at any build site ready — your first swing counts double"},
+    "a fine hat": {"cost": 15, "sold_at": "Pepper & Sons",
+        "pitch": "people notice a hat like this"},
+    "a pocket watch": {"cost": 30, "sold_at": "Pepper & Sons",
+        "pitch": "the quiet signal of a person whose time matters"},
+    "a paperback novel": {"cost": 6, "sold_at": "Pepper & Sons",
+        "pitch": "something to be mid-way through; lends itself to conversation"},
+    "a coffee": {"cost": 2, "sold_at": "Rosie's Diner", "consumable": True,
+        "pitch": "hot, immediate, and cheaper than a meal"},
+}
+
 # ------------------------------------------------- the Invisible Hand (v2.0)
 # Money is a CLOSED LOOP. Every dollar spent at a business lands in that
 # business's till; wages are paid FROM the till. Public jobs (librarian,
