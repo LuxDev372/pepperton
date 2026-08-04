@@ -206,7 +206,16 @@ class Ledger:
             debt["amount"] = round(debt["amount"] - payment, 2)
             creditor = world.agents.get(debt["creditor"])
             if creditor:
-                creditor.money += payment
+                # late wages don't dodge the withholding: income is income,
+                # whether the till paid on time or caught up later
+                tax = 0.0
+                if debt["reason"].startswith("back wages"):
+                    tax = round(payment
+                                * getattr(config, "INCOME_TAX", 0.15), 2)
+                    if tax:
+                        self.tills[config.TOWN_FUND] = round(
+                            self.tills.get(config.TOWN_FUND, 0.0) + tax, 2)
+                creditor.money += payment - tax
             if debt["amount"] <= 0.01:
                 debt["amount"] = 0.0
                 debt["status"] = "paid"

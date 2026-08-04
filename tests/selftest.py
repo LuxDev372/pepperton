@@ -154,6 +154,18 @@ def _inn_and_taxes():
           round(w.tills[config.TOWN_FUND] - fund0, 2) == 0.6,
           f"net +{round(a.money - money0, 2)}, fund +{round(w.tills[config.TOWN_FUND] - fund0, 2)}")
 
+    # late wages don't dodge the withholding (income is income)
+    a.money = 0
+    w.tills["Rosie's Diner"] = 0.0
+    w.pay_wage(a, 4)                   # till is dry: all of it becomes IOU
+    w.tills["Rosie's Diner"] = 10.0
+    fund_before = w.tills[config.TOWN_FUND]
+    w.settle_business_debts()
+    check("late wages are taxed like prompt ones",
+          round(a.money, 2) == 3.4 and
+          round(w.tills[config.TOWN_FUND] - fund_before, 2) == 0.6,
+          f"worker +{round(a.money, 2)}, fund +{round(w.tills[config.TOWN_FUND] - fund_before, 2)}")
+
     # an inn-shaped proposal is shelter infrastructure, not a monument
     for stock in w.projects[:2]:
         stock["complete"] = True   # free up board slots (cap is 3 open)
