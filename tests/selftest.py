@@ -429,6 +429,28 @@ def _permits():
     fresh_data()
 
 _permits()
+
+# ---- v2.4.1 regression: v2.4 must boot on a pre-2.4 config ----
+def _old_config_boot():
+    fresh_data()
+    saved = {}
+    for knob in ("PERMIT_MIN_DAYS", "PERMIT_SHIFTS_PER_DAY", "PERMIT_FINE",
+                 "CONDEMN_GRACE_DAYS", "PERMITS_ENABLED"):
+        if hasattr(config, knob):
+            saved[knob] = getattr(config, knob)
+            delattr(config, knob)
+    try:
+        e = Engine(seed=71)
+        e.run_headless(50)
+        ok = all(p.get("permit_due") for p in e.world.projects)
+        check("v2.4 boots on a pre-2.4 config", ok,
+              f"day {e.world.clock.day}")
+    finally:
+        for knob, val in saved.items():
+            setattr(config, knob, val)
+    fresh_data()
+
+_old_config_boot()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

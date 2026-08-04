@@ -133,8 +133,8 @@ class World:
     def permit_window(work):
         """Days the town grants to finish a project of this size."""
         import math as _math
-        return max(config.PERMIT_MIN_DAYS,
-                   _math.ceil(work / config.PERMIT_SHIFTS_PER_DAY))
+        return max(getattr(config, "PERMIT_MIN_DAYS", 4),
+                   _math.ceil(work / getattr(config, "PERMIT_SHIFTS_PER_DAY", 8)))
 
     def permit_sweep(self):
         """The 08:00 building-inspector pass: fines at the deadline,
@@ -151,11 +151,11 @@ class World:
             # the fine, once, at the deadline
             if day > proj["permit_due"] and not proj.get("fined"):
                 proj["fined"] = True
-                proj["condemn_day"] = day + config.CONDEMN_GRACE_DAYS
+                proj["condemn_day"] = day + getattr(config, "CONDEMN_GRACE_DAYS", 2)
                 proposer = self.agents.get(proj.get("proposed_by") or "")
                 fine_bit = ""
                 if proposer is not None:
-                    fine = config.PERMIT_FINE
+                    fine = getattr(config, "PERMIT_FINE", 10)
                     if proposer.money >= fine:
                         proposer.money -= fine
                         self.ledger.deposit(config.TOWN_FUND, fine)
@@ -174,7 +174,7 @@ class World:
                                  f"{proj['name']}, has expired at "
                                  f"{proj['done']}/{proj['work']} built."
                                  f"{fine_bit} Finish it within "
-                                 f"{config.CONDEMN_GRACE_DAYS} days or the "
+                                 f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days or the "
                                  f"town tears it down."),
                         "interrupt": True, "sim_time": self.clock.hhmm,
                     })
@@ -190,7 +190,7 @@ class World:
                                      f"{proj['name']} has EXPIRED "
                                      f"({proj['done']}/{proj['work']} done). "
                                      f"It gets condemned in "
-                                     f"{config.CONDEMN_GRACE_DAYS} days "
+                                     f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days "
                                      f"unless someone finishes it."),
                             "interrupt": False, "sim_time": self.clock.hhmm,
                         })
