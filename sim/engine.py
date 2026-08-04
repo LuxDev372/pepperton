@@ -155,6 +155,16 @@ class Engine:
             world.ledger.seq = state.get("ledger_seq", 0)
             world.ledger.rent_day_done = state.get("rent_day_done", 0)
             world.ledger.swept_day = state.get("ledger_day_done", 0)
+            world._permit_day_done = state.get("permit_day_done", 0)
+            # the Fall Fair Act reaches back: incomplete projects from
+            # before v2.4 get permits stamped with a FRESH window from
+            # today — the fall fair finally hears a clock ticking
+            if getattr(config, "PERMITS_ENABLED", True):
+                for proj in world.projects:
+                    if not proj["complete"] and \
+                            proj.get("permit_due") is None:
+                        proj["permit_due"] = world.clock.day + \
+                            world.permit_window(proj["work"])
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
@@ -252,6 +262,7 @@ class Engine:
             "ledger_seq": self.world.ledger.seq,
             "rent_day_done": self.world.ledger.rent_day_done,
             "ledger_day_done": self.world.ledger.swept_day,
+            "permit_day_done": self.world._permit_day_done,
         }
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -478,6 +489,8 @@ class Engine:
             self.world.settle_business_debts()
             if self.world.clock.at("08:00"):
                 self.world.morning_ledger()
+        if self.world.clock.at("08:00"):
+            self.world.permit_sweep()
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)

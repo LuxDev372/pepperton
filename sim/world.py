@@ -91,6 +91,12 @@ class World:
             {**p, "done": 0, "complete": False, "contributors": {}}
             for p in config.PROJECTS
         ]
+        # the Fall Fair Act: even the town-charter projects carry permits
+        if getattr(config, "PERMITS_ENABLED", True):
+            for proj in self.projects:
+                proj["permit_due"] = self.clock.day + self.permit_window(
+                    proj["work"])
+        self._permit_day_done = 0
         # economics live in sim/ledger.py; the World only hosts the physics
         self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
@@ -121,6 +127,99 @@ class World:
             if v.get("bank"):
                 return k
         return None
+
+    # -------------------------------------------------- permits (v2.4)
+    @staticmethod
+    def permit_window(work):
+        """Days the town grants to finish a project of this size."""
+        import math as _math
+        return max(config.PERMIT_MIN_DAYS,
+                   _math.ceil(work / config.PERMIT_SHIFTS_PER_DAY))
+
+    def permit_sweep(self):
+        """The 08:00 building-inspector pass: fines at the deadline,
+        condemnation two days later. Idempotent per day."""
+        if not getattr(config, "PERMITS_ENABLED", True):
+            return
+        day = self.clock.day
+        if self._permit_day_done >= day:
+            return
+        self._permit_day_done = day
+        for proj in list(self.projects):
+            if proj["complete"] or proj.get("permit_due") is None:
+                continue
+            # the fine, once, at the deadline
+            if day > proj["permit_due"] and not proj.get("fined"):
+                proj["fined"] = True
+                proj["condemn_day"] = day + config.CONDEMN_GRACE_DAYS
+                proposer = self.agents.get(proj.get("proposed_by") or "")
+                fine_bit = ""
+                if proposer is not None:
+                    fine = config.PERMIT_FINE
+                    if proposer.money >= fine:
+                        proposer.money -= fine
+                        self.ledger.deposit(config.TOWN_FUND, fine)
+                        fine_bit = (f" {proposer.name.split()[0]} is fined "
+                                    f"${fine} as the permit holder.")
+                    else:
+                        self.ledger.add_debt(
+                            proposer.name, config.TOWN_FUND, fine,
+                            f"permit fine — {proj['name']} unfinished",
+                            due_day=day + 2)
+                        fine_bit = (f" {proposer.name.split()[0]} is fined "
+                                    f"${fine} — on the ledger, since they "
+                                    f"can't pay.")
+                    proposer.pending.append({
+                        "text": (f"The permit on YOUR project, "
+                                 f"{proj['name']}, has expired at "
+                                 f"{proj['done']}/{proj['work']} built."
+                                 f"{fine_bit} Finish it within "
+                                 f"{config.CONDEMN_GRACE_DAYS} days or the "
+                                 f"town tears it down."),
+                        "interrupt": True, "sim_time": self.clock.hhmm,
+                    })
+                self.emit("world", None,
+                          f"PERMIT EXPIRED: {proj['name']} sits at "
+                          f"{proj['done']}/{proj['work']}.{fine_bit} "
+                          f"Condemnation in {config.CONDEMN_GRACE_DAYS} days "
+                          f"unless it gets finished.", proj["site"])
+                for villager in self.agents.values():
+                    if villager.name != proj.get("proposed_by"):
+                        villager.pending.append({
+                            "text": (f"Notice board: the permit on "
+                                     f"{proj['name']} has EXPIRED "
+                                     f"({proj['done']}/{proj['work']} done). "
+                                     f"It gets condemned in "
+                                     f"{config.CONDEMN_GRACE_DAYS} days "
+                                     f"unless someone finishes it."),
+                            "interrupt": False, "sim_time": self.clock.hhmm,
+                        })
+                continue
+            # the wrecking crew
+            if proj.get("condemn_day") and day > proj["condemn_day"]:
+                self.projects.remove(proj)
+                self.emit("world", None,
+                          f"CONDEMNED: the half-built {proj['name']} "
+                          f"({proj['done']}/{proj['work']}) is torn down and "
+                          f"the materials reclaimed. The notice board has "
+                          f"room again.", proj["site"])
+                for villager in self.agents.values():
+                    shifts = proj["contributors"].get(villager.name, 0)
+                    if shifts:
+                        villager.pending.append({
+                            "text": (f"The town tore down {proj['name']} — "
+                                     f"your {shifts} shifts of work went "
+                                     f"with it. Somebody should have "
+                                     f"finished what got started."),
+                            "interrupt": True, "sim_time": self.clock.hhmm,
+                        })
+                    else:
+                        villager.pending.append({
+                            "text": (f"{proj['name']} was condemned and torn "
+                                     f"down — the board has an open slot "
+                                     f"again."),
+                            "interrupt": False, "sim_time": self.clock.hhmm,
+                        })
 
     # -------------- the ledger facade (economics: sim/ledger.py) ----------
     @property
@@ -607,10 +706,19 @@ class World:
             "icon": "🏨" if inn else ("🏠" if housing else "🏗️"),
             "desc": f"{name} — proposed by {agent.name.split()[0]}",
             "adds": f"{name} stands here, built by the townsfolk",
+            "permit_due": (self.clock.day + self.permit_window(work)
+                           if getattr(config, "PERMITS_ENABLED", True)
+                           else None),
         })
+        permit_bit = ""
+        if getattr(config, "PERMITS_ENABLED", True):
+            permit_bit = (f" Permit runs to day "
+                          f"{self.clock.day + self.permit_window(work)} — "
+                          f"unfinished projects get fined, then condemned.")
         self.emit("world", None,
                   f"NEW on the notice board: {name} at {site} "
-                  f"(~{work} shifts) — proposed by {agent.name}.",
+                  f"(~{work} shifts) — proposed by {agent.name}."
+                  f"{permit_bit}",
                   agent.location)
         for a in self.agents.values():
             if a.name != agent.name:

@@ -260,6 +260,19 @@ INCOME_TAX = 0.15
 POOR_BOX = "the poor box"
 POOR_BOX_ENABLED = True
 
+# The Fall Fair Act (v2.4): proposing a project takes out a PERMIT with a
+# completion window sized to the work. Blow the deadline: the proposer is
+# fined into the town fund (or into the debt ledger, if broke). Two days
+# after the fine, a still-unfinished project is CONDEMNED — torn down, the
+# board slot freed, the contributors' shifts mourned. Named for the fall
+# fair that squatted at 11/60 for three straight weeks while the town
+# built porch lighting twice.
+PERMITS_ENABLED = True
+PERMIT_MIN_DAYS = 4          # even a tiny project gets this long
+PERMIT_SHIFTS_PER_DAY = 8    # window = max(MIN, work / this), in days
+PERMIT_FINE = 10             # assessed on the proposer at the deadline
+CONDEMN_GRACE_DAYS = 2       # days between the fine and the wrecking crew
+
 # Overheard (untargeted) speech no longer interrupts everyone in the room —
 # it's still perceived, but only being directly addressed demands a response.
 # This is the main brake on runaway talk-chains.

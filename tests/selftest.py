@@ -375,6 +375,60 @@ def _poor_box():
     fresh_data()
 
 _poor_box()
+
+# ---- appended by v2.4: the Fall Fair Act ----
+def _permits():
+    fresh_data()
+    e = Engine(seed=61)
+    w = e.world
+    ags = list(w.agents.values())
+    a = ags[0]
+
+    # genesis projects carry permits
+    stamped = [p for p in w.projects if p.get("permit_due")]
+    check("charter projects carry permits", len(stamped) == len(w.projects),
+          f"{len(stamped)}/{len(w.projects)} stamped")
+
+    # a proposal takes out a permit sized to the work
+    for stock in w.projects[:2]:
+        stock["complete"] = True
+    a.location = "the plaza"
+    ok, _ = w.execute(a, {"action": "propose", "project": "the bandstand",
+                          "site": "the plaza", "work": 40})
+    proj = next(p for p in w.projects if p["name"] == "the bandstand")
+    expect = w.clock.day + w.permit_window(40)
+    check("proposals take out permits", ok and proj["permit_due"] == expect,
+          f"due day {proj.get('permit_due')} (expected {expect})")
+
+    # deadline passes: broke proposer is fined INTO THE LEDGER
+    a.money = 2
+    w.clock.day = proj["permit_due"] + 1
+    w.permit_sweep()
+    fine_debts = w.open_debts(debtor=a.name, creditor=config.TOWN_FUND)
+    check("expired permit fines the proposer", proj.get("fined") and
+          any("permit fine" in d["reason"] for d in fine_debts),
+          f"fined={proj.get('fined')}, debts={len(fine_debts)}")
+
+    # two days later, still unbuilt: condemned, slot freed (the sweep
+    # also takes any other expired carcass — the inspector is thorough)
+    w.clock.day = proj["condemn_day"] + 1
+    w._permit_day_done = 0
+    w.permit_sweep()
+    check("the wrecking crew comes at dawn",
+          all(p["name"] != "the bandstand" for p in w.projects) and
+          all(p["complete"] for p in w.projects), "")
+
+    # but a FINISHED project is untouchable, fined or not
+    survivor = w.projects[0]
+    survivor["fined"] = True
+    survivor["condemn_day"] = w.clock.day - 1
+    w._permit_day_done = 0
+    w.permit_sweep()
+    check("finished work cannot be condemned",
+          any(p["name"] == survivor["name"] for p in w.projects), "")
+    fresh_data()
+
+_permits()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

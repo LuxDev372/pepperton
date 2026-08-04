@@ -117,8 +117,16 @@ def decision_prompt(agent, world, perceptions, memories):
         else:
             who = "NOBODY YET"
             status = f"0/{p['work']} — not started"
+        permit_note = ""
+        if getattr(config, "PERMITS_ENABLED", True) and p.get("permit_due"):
+            if p.get("fined"):
+                permit_note = (f" [PERMIT EXPIRED — CONDEMNED day "
+                               f"{p.get('condemn_day')} unless FINISHED; "
+                               f"only hammers save it now]")
+            else:
+                permit_note = f" [permit to day {p['permit_due']}]"
         board_lines.append(f"- {p['name']} at {p['site']}: {status} — "
-                           f"contributors: {who}")
+                           f"contributors: {who}{permit_note}")
     board = "\n".join(board_lines) or (
         "- (EMPTY — everything proposed has been built! The town did that. "
         "Anyone can post a new project with the propose action — what does "
