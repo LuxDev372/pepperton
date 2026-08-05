@@ -248,6 +248,228 @@ class Ledger:
             return "solid", config.LOAN_MAX_GOOD, shifts
         return "thin", config.LOAN_MAX_SHAKY, shifts
 
+    # -------------------------------------- the Holt Act (v2.7): foreclosure
+    @staticmethod
+    def foreclosure_cfg():
+        cfg = {"enabled": True, "bank_reserve": 60, "grace_days": 3,
+               "min_debt": 12, "house_price": 40}
+        cfg.update(getattr(config, "FORECLOSURE", {}))
+        return cfg
+
+    def debt_market(self):
+        """The bank buys the town fund's receivables at face value, oldest
+        first, keeping a reserve of loan capital. The fund gets cash NOW
+        (it pays the public payroll); the bank gets paper with teeth."""
+        cfg = self.foreclosure_cfg()
+        world = self.world
+        bank = world.bank_name()
+        if not cfg["enabled"] or not bank or bank not in self.tills:
+            return
+        day = world.clock.day
+        bought = []
+        for debt in self.debts:
+            if debt["status"] != "open" or \
+                    debt["creditor"] != config.TOWN_FUND or \
+                    debt["debtor"] not in world.agents:
+                continue   # only villagers' paper; business IOUs stay put
+            if debt["due_day"] is None or day <= debt["due_day"]:
+                continue   # the bank buys ARREARS — fresh debt keeps its
+                           # grace with the fund; blow the deadline and
+                           # your paper goes to market
+            price = debt["amount"]
+            if self.tills[bank] - price < cfg["bank_reserve"]:
+                continue   # the vault keeps its reserve, always
+            self.tills[bank] = round(self.tills[bank] - price, 2)
+            self.tills[config.TOWN_FUND] = round(
+                self.tills.get(config.TOWN_FUND, 0.0) + price, 2)
+            debt["creditor"] = bank
+            debt["assigned_day"] = day
+            debt["due_day"] = day + cfg["grace_days"]
+            debt.pop("noticed", None)   # the bank posts its own notice
+            bought.append(debt)
+        if not bought:
+            return
+        total = sum(d["amount"] for d in bought)
+        debtors = {}
+        for debt in bought:
+            debtors.setdefault(debt["debtor"], 0.0)
+            debtors[debt["debtor"]] = round(
+                debtors[debt["debtor"]] + debt["amount"], 2)
+        world.emit("world", None,
+                   f"NOTICE from {bank}: the bank has PURCHASED "
+                   f"${total:.0f} of debt owed to the town fund "
+                   f"({', '.join(sorted(debtors))}). The paper now belongs "
+                   f"to the bank — and the bank collects.", bank)
+        for name, owed in sorted(debtors.items()):
+            debtor = world.agents.get(name)
+            total_held = sum(d["amount"] for d in self.open_debts(
+                debtor=name, creditor=bank) if d.get("assigned_day"))
+            if debtor:
+                debtor.pending.append({
+                    "text": (f"{bank} has bought your debt from the town "
+                             f"fund — ${owed:.0f} today, ${total_held:.0f} "
+                             f"held in all. The bank gives you until day "
+                             f"{day + cfg['grace_days']} to pay (the pay "
+                             f"action, to 'the bank'). After that, the "
+                             f"bank takes the HOUSE."),
+                    "interrupt": True, "sim_time": world.clock.hhmm,
+                })
+
+    def foreclosure_sweep(self):
+        """Bought paper past its grace window: the levy. The bank locks the
+        door, lists the house, and the villager sleeps where they can."""
+        cfg = self.foreclosure_cfg()
+        world = self.world
+        bank = world.bank_name()
+        if not cfg["enabled"] or not bank:
+            return
+        day = world.clock.day
+        for villager in list(world.agents.values()):
+            if not villager.home:
+                continue
+            held = [d for d in self.open_debts(debtor=villager.name,
+                                               creditor=bank)
+                    if d.get("assigned_day")]
+            overdue = [d for d in held if d["due_day"] is not None
+                       and day > d["due_day"]]
+            total = sum(d["amount"] for d in held)
+            if not overdue or total < cfg["min_debt"]:
+                continue
+            house = villager.home
+            loc = world.locations.get(house)
+            if loc is None:
+                continue
+            loc.pop("home_of", None)
+            loc["for_sale"] = cfg["house_price"]
+            loc["seized_from"] = villager.name
+            loc["desc"] = (f"{villager.name}'s old house — bank-owned, "
+                           f"FOR SALE at ${cfg['house_price']} (deed at "
+                           f"the teller window)")
+            villager.home = None
+            world.emit("world", None,
+                       f"FORECLOSURE at {house}: {bank} has levied the "
+                       f"home of {villager.name} over ${total:.0f} in "
+                       f"unpaid debt. The door is locked. The house is "
+                       f"for sale — ${cfg['house_price']} at the teller "
+                       f"window. The ledger forgets nothing.", house)
+            villager.pending.append({
+                "text": (f"The bank took your house. Your key does not "
+                         f"turn. Everything you owe (${total:.0f}) still "
+                         f"stands — pay the bank in full before someone "
+                         f"buys {house} and it's yours again. Until then: "
+                         f"the park bench, or an inn bed if you can pay."),
+                "interrupt": True, "sim_time": world.clock.hhmm,
+            })
+            for witness in world.agents.values():
+                self.world_memory(witness.name,
+                                  f"The bank foreclosed on {villager.name} — "
+                                  f"took the house over ${total:.0f} in debt. "
+                                  f"The ledger has teeth now. Everyone saw.",
+                                  9 if witness.name == villager.name else 8)
+
+    def world_memory(self, who, text, importance):
+        """Engine-owned memory store, reached through the world's engine
+        backref when present (mock tests run world-only)."""
+        engine = getattr(self.world, "engine", None)
+        if engine is not None:
+            engine.memory.add(who, self.world.tick_no, self.world.clock.day,
+                              self.world.clock.hhmm, "event", text, importance)
+
+    def check_redemption(self, agent):
+        """Paying the bank in full before the sale buys the door back."""
+        cfg = self.foreclosure_cfg()
+        world = self.world
+        bank = world.bank_name()
+        if not cfg["enabled"] or not bank:
+            return
+        held = [d for d in self.open_debts(debtor=agent.name, creditor=bank)
+                if d.get("assigned_day")]
+        if held:
+            return
+        for house, loc in world.locations.items():
+            if loc.get("for_sale") and loc.get("seized_from") == agent.name:
+                loc.pop("for_sale", None)
+                loc.pop("seized_from", None)
+                loc["home_of"] = agent.name
+                loc["desc"] = f"{agent.name}'s house"
+                if agent.home is None:
+                    agent.home = house
+                world.emit("action", agent.name,
+                           f"paid the bank in full and bought their own "
+                           f"door back — {house} is a home again",
+                           agent.location)
+                agent.pending.append({
+                    "text": (f"Paid in full. The bank handed back the key "
+                             f"to {house}. Remember how this felt."),
+                    "interrupt": False, "sim_time": world.clock.hhmm,
+                })
+                return
+
+    def sell_seized_house(self, buyer, house):
+        """A villager buys a bank-owned house at the listed price. The
+        price goes against the evictee's debt; any surplus is honestly
+        returned to them. Returns (ok, note)."""
+        cfg = self.foreclosure_cfg()
+        world = self.world
+        bank = world.bank_name()
+        loc = world.locations.get(house)
+        if not loc or not loc.get("for_sale"):
+            return False, f"{house} is not for sale"
+        price = loc["for_sale"]
+        if buyer.money < price:
+            return False, (f"the deed to {house} costs ${price} and they "
+                           f"have ${buyer.money:.0f}")
+        evictee_name = loc.get("seized_from")
+        buyer.money -= price
+        remaining = price
+        if bank and evictee_name:
+            for debt in self.debts:
+                if remaining <= 0:
+                    break
+                if debt["status"] == "open" and \
+                        debt["debtor"] == evictee_name and \
+                        debt["creditor"] == bank and debt.get("assigned_day"):
+                    hit = min(remaining, debt["amount"])
+                    debt["amount"] = round(debt["amount"] - hit, 2)
+                    remaining = round(remaining - hit, 2)
+                    if debt["amount"] <= 0.01:
+                        debt["amount"] = 0.0
+                        debt["status"] = "paid"
+        applied = round(price - remaining, 2)
+        if bank and bank in self.tills and applied:
+            self.tills[bank] = round(self.tills[bank] + applied, 2)
+        loc.pop("for_sale", None)
+        loc.pop("seized_from", None)
+        loc["owner"] = buyer.name
+        evictee = world.agents.get(evictee_name) if evictee_name else None
+        surplus = remaining
+        if surplus > 0:
+            if evictee:
+                evictee.money += surplus
+            elif bank and bank in self.tills:
+                self.tills[bank] = round(self.tills[bank] + surplus, 2)
+        if buyer.home is None:
+            buyer.home = house
+            loc["home_of"] = buyer.name
+            loc["desc"] = f"{buyer.name}'s house (bought at the bank sale)"
+            note = f"bought {house} at the bank's sale (-${price}) and moved in"
+        else:
+            loc["desc"] = (f"a house owned by {buyer.name} "
+                           f"(bought at the bank sale)")
+            note = (f"bought {house} at the bank's sale (-${price}) — "
+                    f"a second deed; a landlord is born")
+        if evictee:
+            settle_bit = (f"${applied:.0f} of the price went against your "
+                          f"debt" + (f"; ${surplus:.0f} came back to you — "
+                                     f"honest books" if surplus > 0 else ""))
+            evictee.pending.append({
+                "text": (f"{buyer.name} bought your old house at the bank's "
+                         f"sale. {settle_bit}."),
+                "interrupt": True, "sim_time": world.clock.hhmm,
+            })
+        world.emit("action", buyer.name, note, buyer.location)
+        return True, note
+
     # -------------------------------------------------------- morning sweep
     def morning_sweep(self):
         """The 08:00 sweep: rent falls due, promise deadlines are judged,
@@ -265,6 +487,10 @@ class Ledger:
             self.rent_day_done = day
             for tenant in world.agents.values():
                 if not tenant.home:
+                    continue
+                # a bought deed ends rent: owning your home is the way out
+                if world.locations.get(tenant.home, {}).get("owner") == \
+                        tenant.name:
                     continue
                 if tenant.money >= config.RENT_COST:
                     tenant.money -= config.RENT_COST
@@ -343,3 +569,6 @@ class Ledger:
                             "interrupt": villager.name == debt["debtor"],
                             "sim_time": world.clock.hhmm,
                         })
+        # the Holt Act: the bank buys the fund's paper, then collects on it
+        self.debt_market()
+        self.foreclosure_sweep()

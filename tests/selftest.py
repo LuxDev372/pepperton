@@ -556,6 +556,177 @@ def _goods():
     fresh_data()
 
 _goods()
+
+# ---- appended by v2.7: the Holt Act (debt market, foreclosure, hiring) ----
+def _holt_act():
+    fresh_data()
+    e = Engine(seed=77)
+    w = e.world
+    bank = w.bank_name()
+    fc = w.ledger.foreclosure_cfg()
+    debtor = next(a for a in w.agents.values()
+                  if a.home and a.workplace() != bank)
+    debtor.money = 0
+
+    # book overdue rent debt directly, then run the market
+    w.clock.day = 10
+    d1 = w.add_debt(debtor.name, config.TOWN_FUND, 6, "unpaid rent (test)",
+                    due_day=8)
+    d2 = w.add_debt(debtor.name, config.TOWN_FUND, 6, "unpaid rent (test)",
+                    due_day=9)
+    fresh = w.add_debt(debtor.name, config.TOWN_FUND, 6,
+                       "unpaid rent (test-fresh)", due_day=12)
+    bank0, fund0 = w.tills[bank], w.tills[config.TOWN_FUND]
+    w.ledger.debt_market()
+    check("the bank buys the fund's arrears at face value",
+          d1["creditor"] == bank and d2["creditor"] == bank and
+          w.tills[bank] == round(bank0 - 12, 2) and
+          w.tills[config.TOWN_FUND] == round(fund0 + 12, 2),
+          f"bank {w.tills[bank]}, fund {w.tills[config.TOWN_FUND]}")
+    check("fresh debt keeps its grace with the fund",
+          fresh["creditor"] == config.TOWN_FUND, fresh["creditor"])
+    check("purchase restarts the clock toward the levy",
+          d1["assigned_day"] == 10 and d1["due_day"] == 10 + fc["grace_days"],
+          f"due {d1['due_day']}")
+
+    # reserve: the vault never spends below the floor
+    w.tills[bank] = fc["bank_reserve"] + 5
+    big = w.add_debt(debtor.name, config.TOWN_FUND, 50, "too big (test)",
+                     due_day=1)
+    w.ledger.debt_market()
+    check("the bank keeps its reserve", big["creditor"] == config.TOWN_FUND
+          and w.tills[bank] == fc["bank_reserve"] + 5, f"till {w.tills[bank]}")
+    big["status"] = "paid"
+
+    # grace passes unpaid: the levy
+    house = debtor.home
+    w.clock.day = 10 + fc["grace_days"] + 1
+    w.ledger.foreclosure_sweep()
+    loc = w.locations[house]
+    check("the bank takes the house", debtor.home is None and
+          loc.get("for_sale") == fc["house_price"] and
+          loc.get("seized_from") == debtor.name and
+          "home_of" not in loc, str(loc)[:60])
+    fore_ev = [ev for ev in w.events
+               if "FORECLOSURE" in str(ev.get("text", ""))]
+    check("the levy is town news", len(fore_ev) == 1,
+          fore_ev[0]["text"][:60] if fore_ev else "no event")
+
+    # a rich neighbor buys the deed at the teller window
+    buyer = next(a for a in w.agents.values()
+                 if a.name != debtor.name and a.home)
+    buyer.money = 100
+    buyer.location = bank
+    owed_before = sum(d["amount"] for d in w.open_debts(
+        debtor=debtor.name, creditor=bank) if d.get("assigned_day"))
+    dm0 = debtor.money
+    ok, note = w.execute(buyer, {"action": "buy", "item": house})
+    surplus = round(fc["house_price"] - owed_before, 2)
+    check("the sale pays the debt and returns the surplus", ok and
+          buyer.money == 100 - fc["house_price"] and
+          not [d for d in w.open_debts(debtor=debtor.name, creditor=bank)
+               if d.get("assigned_day")] and
+          debtor.money == round(dm0 + max(0, surplus), 2) and
+          w.locations[house].get("owner") == buyer.name, note[:70])
+    check("a deed on a second house makes a landlord, not a move",
+          buyer.home != house and "home_of" not in w.locations[house],
+          buyer.home)
+
+    # redemption: pay in full BEFORE the sale and the door comes back
+    debtor2 = next(a for a in w.agents.values()
+                   if a.home and a.name not in (debtor.name, buyer.name))
+    h2 = debtor2.home
+    w.add_debt(debtor2.name, bank, 14, "bought paper (test)", due_day=1)
+    for d in w.open_debts(debtor=debtor2.name, creditor=bank):
+        d["assigned_day"] = 1
+    w.ledger.foreclosure_sweep()
+    assert debtor2.home is None, "setup: second levy"
+    debtor2.money = 20
+    debtor2.location = bank
+    ok, note = w.execute(debtor2, {"action": "pay", "to": "the bank",
+                                   "amount": 14})
+    check("paid in full buys the door back", ok and debtor2.home == h2 and
+          w.locations[h2].get("home_of") == debtor2.name and
+          "for_sale" not in w.locations[h2], note[:60])
+
+    # a bought deed ends rent
+    w.clock.day = config.RENT_EVERY_DAYS * 40 + 1
+    w.ledger.rent_day_done = 0
+    w.ledger.swept_day = w.clock.day - 1
+    # give everyone rent money so only the ownership exemption differs
+    for a in w.agents.values():
+        a.money = max(a.money, 50)
+    owner_money0 = buyer.money
+    # move the buyer INTO the owned house to test the exemption
+    buyer.home = house
+    w.locations[house]["home_of"] = buyer.name
+    w.morning_ledger()
+    check("owning your home ends rent", buyer.money == owner_money0,
+          f"${buyer.money} vs ${owner_money0}")
+    fresh_data()
+
+def _situations_vacant():
+    fresh_data()
+    e = Engine(seed=78)
+    w = e.world
+    openings = w.open_positions()
+    jobless = next((a for a in w.agents.values() if not a.workplace()), None)
+    if jobless is None:
+        a0 = next(iter(w.agents.values()))
+        a0.job = "retired"
+        jobless = a0
+        openings = w.open_positions()
+    check("a town with idle hands posts its openings",
+          isinstance(openings, dict), str(openings)[:60])
+    if openings:
+        job, wp = sorted(openings.items())[0]
+        jobless.location = wp
+        ok, note = w.execute(jobless, {"action": "work"})
+        check("showing up is the interview", ok and jobless.job == job and
+              jobless.workplace() == wp, note[:60])
+        check("the new hire is on today's attendance",
+              jobless.name in w.worked_today, "")
+        # the bell tells the jobless where the doors are
+        still_jobless = next((a for a in w.agents.values()
+                              if not a.workplace()), None)
+        if still_jobless and w.open_positions():
+            w.clock.day = 3
+            w.morning_bell()
+            check("the bell advertises situations vacant",
+                  any("HIRING" in p["text"]
+                      for p in still_jobless.pending), "")
+    fresh_data()
+
+def _old_config_boot_v27():
+    """v2.4.1's law, re-sworn for v2.7: a config written before the Holt
+    Act must boot and sweep untouched."""
+    fresh_data()
+    had_fc = getattr(config, "FORECLOSURE", None)
+    had_hire = getattr(config, "HIRING_ENABLED", None)
+    try:
+        if hasattr(config, "FORECLOSURE"):
+            del config.FORECLOSURE
+        if hasattr(config, "HIRING_ENABLED"):
+            del config.HIRING_ENABLED
+        e = Engine(seed=79)
+        w = e.world
+        w.clock.day = 5
+        w.morning_ledger()   # sweeps, markets, forecloses — without the knobs
+        w.morning_bell()
+        w.attendance_ledger()
+        check("a pre-Holt config boots and sweeps clean", True, "")
+    except Exception as exc:
+        check("a pre-Holt config boots and sweeps clean", False, repr(exc))
+    finally:
+        if had_fc is not None:
+            config.FORECLOSURE = had_fc
+        if had_hire is not None:
+            config.HIRING_ENABLED = had_hire
+    fresh_data()
+
+_holt_act()
+_situations_vacant()
+_old_config_boot_v27()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

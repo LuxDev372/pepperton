@@ -287,8 +287,41 @@ class MockBrain(BrainBase):
                 return {"action": "rest"}, "", "mock: exhausted"
             return {"action": "move", "to": bed}, "", "mock: exhausted, heading to rest"
 
+        # the jobless take an open position (v2.7: showing up is the interview)
+        if getattr(config, "HIRING_ENABLED", True) and \
+                not agent.workplace() and hasattr(world, "open_positions"):
+            openings = world.open_positions()
+            if openings:
+                job, wp = sorted(openings.items())[0]
+                if agent.location == wp:
+                    return {"action": "work"}, "", "mock: taking the job"
+                if self.rng.random() < 0.4:
+                    return ({"action": "move", "to": wp},
+                            "", "mock: job hunting")
+
         # settle a debt when the creditor is standing right here (mock virtue)
         if getattr(config, "ECONOMY", False) and hasattr(world, "open_debts"):
+            # the Holt Act concentrates the mind: bank-held paper gets paid
+            # first, from anywhere, before the house goes
+            bank = world.bank_name()
+            if bank:
+                held = sum(d["amount"] for d in world.open_debts(
+                    debtor=agent.name, creditor=bank) if d.get("assigned_day"))
+                if held > 0 and agent.money >= held and \
+                        self.rng.random() < 0.6:
+                    return ({"action": "pay", "to": "the bank",
+                             "amount": held},
+                            "", "mock: saving the house")
+                # the rich buy a seized house when one is going cheap
+                for house, loc in world.locations.items():
+                    if loc.get("for_sale") and \
+                            agent.money >= loc["for_sale"] + 15 and \
+                            self.rng.random() < 0.3:
+                        if agent.location == bank:
+                            return ({"action": "buy", "item": house},
+                                    "", "mock: buying the deed")
+                        return ({"action": "move", "to": bank},
+                                "", "mock: heading to the sale")
             for d in world.open_debts(debtor=agent.name):
                 cred = world.agents.get(d["creditor"])
                 if cred and cred.location == agent.location and \

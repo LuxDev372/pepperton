@@ -162,11 +162,26 @@ class World:
         wanted = str(action.get("item") or "").strip().lower()
         if not wanted:
             return False, "reached for their wallet, forgot what for"
+        # the Holt Act: seized houses are bought like anything else — by
+        # name, at the bank's teller window or standing at the door
+        for house, loc in self.locations.items():
+            if loc.get("for_sale") and (wanted in house.lower()
+                                        or "house" in wanted
+                                        or "home" in wanted or "deed" in wanted):
+                bank = self.bank_name()
+                if agent.location not in (bank, house):
+                    return False, (f"the deed to {house} is signed at "
+                                   f"{bank} (or at the door itself)")
+                return self.ledger.sell_seized_house(agent, house)
         catalog = self.goods_catalog()
         item = next((k for k in catalog if wanted in k.lower()
                      or k.lower() in wanted), None)
         if item is None:
             names = ", ".join(catalog)
+            sale = [f"{h} (${l['for_sale']}, deed at the bank)"
+                    for h, l in self.locations.items() if l.get("for_sale")]
+            if sale:
+                names += "; FOR SALE: " + ", ".join(sale)
             return False, f"nobody sells {action.get('item')!r} — the catalogs of this town: {names}"
         spec = catalog[item]
         if agent.location != spec["sold_at"]:
@@ -203,9 +218,23 @@ class World:
         self._bell_day_done = day
         self.worked_today = set()
         self.earned_today = {}
+        openings = (self.open_positions()
+                    if getattr(config, "HIRING_ENABLED", True) else {})
         for worker in self.agents.values():
             workplace = worker.workplace()
             if not workplace:
+                if openings:
+                    sits = "; ".join(f"{j} at {w}"
+                                     for j, w in sorted(openings.items()))
+                    worker.pending.append({
+                        "text": (f"The morning bell rings for everyone but "
+                                 f"you — you have no work. The town is "
+                                 f"HIRING: {sits}. Show up and use the "
+                                 f"work action; showing up IS the "
+                                 f"interview. Wages are real money."),
+                        "interrupt": worker.money < config.MEAL_COST,
+                        "sim_time": self.clock.hhmm,
+                    })
                 continue
             streak = self.absence_streaks.get(worker.name, 0)
             streak_bit = (f" You haven't opened those doors in {streak} "
@@ -252,6 +281,12 @@ class World:
             lines.append("ON SHIFT today: " + "; ".join(showed) + ".")
         if absent:
             lines.append("DOORS NEVER OPENED: " + "; ".join(absent) + ".")
+        if getattr(config, "HIRING_ENABLED", True):
+            openings = self.open_positions()
+            if openings:
+                lines.append("SITUATIONS VACANT: " + "; ".join(
+                    f"{j} at {w}" for j, w in sorted(openings.items()))
+                    + " — show up and work.")
         text = "ATTENDANCE LEDGER — " + " ".join(lines)
         self.emit("world", None, text, "the plaza")
         for villager in self.agents.values():
@@ -981,6 +1016,10 @@ class World:
                       f"paid ${paid:.0f} to {inst}"
                       + (" — debt CLEARED" if cleared else ""),
                       agent.location)
+            if inst == bank:
+                # the Holt Act's mercy clause: paid in full before the
+                # sale, the door comes back
+                self.ledger.check_redemption(agent)
             return True, (f"paid {inst} ${paid:.0f}"
                           + (" (all square)" if cleared
                              else f" (still owes "
@@ -1068,8 +1107,38 @@ class World:
                       f"${repay:.0f} by day {due})")
 
 
+    def open_positions(self):
+        """Situations vacant: every job in the town's book that nobody
+        holds. A villager without work claims one by SHOWING UP — use the
+        work action at the place, and the job is theirs. (v2.7: passed
+        alongside the Holt Act — a law with teeth owes the toothless a
+        way to earn.)"""
+        held = {a.job for a in self.agents.values()}
+        out = {}
+        for job, wp in getattr(config, "WORKPLACES", {}).items():
+            if wp and wp in self.locations and job not in held:
+                out[job] = wp
+        return out
+
     def _verb_work(self, agent, action):
         wp = agent.workplace()
+        if not wp and getattr(config, "HIRING_ENABLED", True):
+            openings = self.open_positions()
+            here = next((j for j, w in sorted(openings.items())
+                         if w == agent.location), None)
+            if here:
+                agent.job = here
+                wp = agent.workplace()
+                self.emit("action", agent.name,
+                          f"was taken on as the town {here} at {wp} — "
+                          f"showed up, got the job, first shift starts now",
+                          wp)
+            elif openings:
+                sits = "; ".join(f"{j} at {w}"
+                                 for j, w in sorted(openings.items()))
+                return False, (f"is {agent.job} and has no shift to work — "
+                               f"but the town is HIRING: {sits}. Go there "
+                               f"and work; showing up IS the interview")
         if not wp:
             return False, f"is {agent.job} and has no shift to work"
         if agent.location != wp:

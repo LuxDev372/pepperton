@@ -91,6 +91,7 @@ class Engine:
         else:
             cast = generate_cast(self.seed)
         self.world = World(cast, world_id=self.world_id)
+        self.world.engine = self   # backref: the ledger writes memories
         self.memory = MemoryStore(world_id=self.world_id)
         self.brains = {a.name: brains.build_brain(a, self.seed) for a in cast}
         self.radio = Radio(self.seed)

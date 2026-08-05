@@ -3,6 +3,7 @@
 import json
 
 import config
+from sim.ledger import Ledger
 
 VERBS = """Respond with ONLY a JSON object choosing ONE action:
   {"action": "move", "to": "<location name>"}
@@ -61,7 +62,13 @@ def _econ_line():
             + ("  A poor box sits on the diner counter: drop money in "
                "(pay action, to 'the poor box') and it quietly buys "
                "meals for neighbors who can't pay."
-               if getattr(config, "POOR_BOX_ENABLED", True) else ""))
+               if getattr(config, "POOR_BOX_ENABLED", True) else "")
+            + ("  And know the Holt Act: the bank BUYS unpaid debts from "
+               "the town fund, and debt the bank holds can cost you your "
+               "HOUSE — the bank forecloses, lists the house for sale, "
+               "and you sleep rough until you pay off the bank or someone "
+               "buys your old door out from under you."
+               if Ledger.foreclosure_cfg()["enabled"] else ""))
 
 
 def system_prompt(agent, world):
@@ -240,8 +247,45 @@ def decision_prompt(agent, world, perceptions, memories):
                 bits.append(f"you PROMISED {p['to'].split()[0]} money, on the "
                             f"record — pay them something by day {p['due_day']} "
                             f"or the town learns what your word is worth")
+        # the Holt Act: bank-held paper is a countdown to losing the house
+        bank = world.bank_name()
+        if bank:
+            held = [d for d in world.open_debts(debtor=agent.name,
+                                                creditor=bank)
+                    if d.get("assigned_day")]
+            if held and agent.home:
+                total = sum(d["amount"] for d in held)
+                soonest = min(d["due_day"] for d in held
+                              if d["due_day"] is not None)
+                bits.append(f"the BANK holds ${total:.0f} of your debt — "
+                            f"pay the bank by day {soonest} or it takes "
+                            f"your HOUSE. This is not a bluff; ask anyone "
+                            f"who has watched a foreclosure")
+            for house, loc in world.locations.items():
+                if loc.get("for_sale"):
+                    if loc.get("seized_from") == agent.name:
+                        bits.append(f"your old home {house} is listed at "
+                                    f"${loc['for_sale']} — pay the bank "
+                                    f"off IN FULL first and the key is "
+                                    f"yours again, free")
+                    elif agent.money >= loc["for_sale"]:
+                        bits.append(f"{house} is bank-owned and FOR SALE "
+                                    f"at ${loc['for_sale']} — you could "
+                                    f"BUY it (the buy action, at the "
+                                    f"bank): a deed means never paying "
+                                    f"rent on it")
         if bits:
             ledger_note = "\nThe ledger (public record): " + "; ".join(bits) + "."
+        if getattr(config, "HIRING_ENABLED", True) and \
+                not agent.workplace() and hasattr(world, "open_positions"):
+            openings = world.open_positions()
+            if openings:
+                sits = "; ".join(f"{j} at {w}"
+                                 for j, w in sorted(openings.items()))
+                ledger_note += (f"\nSITUATIONS VACANT (you have no job, and "
+                                f"wages are the only honest money): {sits}. "
+                                f"Go there and use the work action — "
+                                f"showing up IS the interview.")
     return f"""It is {world.clock.label}. You are at {agent.location} ({world.locations[agent.location].get('desc', '')}).{drink_note}{night_note}
 Here with you: {people}.{rel_note}
 Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.{ledger_note}{shop_note}

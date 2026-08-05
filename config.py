@@ -279,6 +279,31 @@ INCOME_TAX = 0.15
 POOR_BOX = "the poor box"
 POOR_BOX_ENABLED = True
 
+# The Holt Act (v2.7): the bank buys the town fund's receivables at face
+# value each morning, and paper the bank holds has TEETH. Sit on bought
+# debt past the grace window and the bank levies your HOUSE: door locked,
+# home listed for sale, you sleep where you can. Pay the bank off before
+# the sale and you buy your door back; if it sells, the price goes
+# against your debt and any surplus is honestly returned. Passed on Day
+# 69 of Pepperton, when the arrears board hit 21 counts of unpaid rent
+# against a fund four villagers ate from — named for Ash Holt, banker,
+# four cycles in arrears at a bank he had not once opened, and thereby
+# the first man in town history foreclosed on by his own employer.
+FORECLOSURE = {
+    "enabled": True,
+    "bank_reserve": 60,   # loan capital the bank will NOT spend on paper
+    "grace_days": 3,      # days between purchase notice and the levy
+    "house_price": 40,    # list price of a seized house, deed at the teller
+    "min_debt": 12,       # the bank doesn't take houses over pocket change
+}
+
+# Situations Vacant (v2.7, same statute): a law with teeth owes the
+# toothless a way to earn. Any job in WORKPLACES that nobody holds is
+# OPEN — an unemployed villager claims it by walking in and using the
+# work action. Showing up is the interview. The bell and the evening
+# ledger advertise the openings daily.
+HIRING_ENABLED = True
+
 # The Fall Fair Act (v2.4): proposing a project takes out a PERMIT with a
 # completion window sized to the work. Blow the deadline: the proposer is
 # fined into the town fund (or into the debt ledger, if broke). Two days
