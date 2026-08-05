@@ -138,6 +138,56 @@ class Director:
                world.radio_location() or "the plaza", deliver=False)
         return "radio is dead air today"
 
+    def _ev_heist(self):
+        """The lockbox is forced in the night. No culprit exists — the
+        Director takes the money and leaves nothing but a mystery. The
+        town will invent a suspect; that is the point. Weight 0 in config:
+        this NEVER fires at random. The god button only."""
+        world = self.engine.world
+        fund = getattr(config, "TOWN_FUND", "the town fund")
+        target = fund
+        if world.tills.get(fund, 0.0) < 30:
+            bank = world.bank_name()
+            if bank and world.tills.get(bank, 0.0) > world.tills.get(fund, 0.0):
+                target = bank
+        balance = world.tills.get(target, 0.0)
+        if balance < 10:
+            return "nothing worth stealing tonight"
+        take = round(balance * self.rng.uniform(0.6, 0.9), 2)
+        world.tills[target] = round(balance - take, 2)
+        where = ("the town lockbox" if target == fund
+                 else f"the vault at {target}")
+        world.emit("world", None,
+                   f"{where.upper()} WAS FORCED IN THE NIGHT — ${take:.0f} "
+                   f"is GONE. No witnesses. No note. Everyone will have a "
+                   f"theory by breakfast.", "the plaza")
+        for villager in world.agents.values():
+            villager.pending.append({
+                "text": (f"The town wakes to a crime: {where} was forced "
+                         f"overnight and ${take:.0f} is missing. Nobody "
+                         f"saw anything. Nobody has confessed. Think about "
+                         f"what this means — for the town, and for who "
+                         f"you trust."),
+                "interrupt": True,
+                "sim_time": world.clock.hhmm,
+            })
+            self.engine.memory.add(
+                villager.name, world.tick_no, world.clock.day,
+                world.clock.hhmm, "event",
+                f"Someone robbed {where} — ${take:.0f} gone in the night. "
+                f"No one knows who did it.", 9)
+        # one villager half-remembers something — ambiguous by design
+        witness = self._random_agent(awake=False)
+        if witness:
+            place = self.rng.choice(world.public_locations())
+            self.engine.memory.add(
+                witness.name, world.tick_no, world.clock.day,
+                world.clock.hhmm, "rumor",
+                f"Now that you think of it... you could SWEAR you saw a "
+                f"figure near {place} very late last night. You didn't "
+                f"think anything of it at the time.", 8)
+        return f"heist: ${take:.0f} taken from {target}"
+
     def _ev_stranger(self):
         world = self.engine.world
         used_firsts = {a.name.split()[0] for a in world.agents.values()}

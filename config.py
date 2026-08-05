@@ -286,6 +286,16 @@ POOR_BOX_ENABLED = True
 # board slot freed, the contributors' shifts mourned. Named for the fall
 # fair that squatted at 11/60 for three straight weeks while the town
 # built porch lighting twice.
+# The Working Day (v2.6): labor becomes as PUBLIC as building. A morning
+# bell reminds every employed villager their shift starts — and that the
+# town notices who shows. Each evening the attendance ledger posts
+# town-wide: who worked (and earned what), whose doors never opened, and
+# how many days running. The clout engine that built nine monuments,
+# aimed at the teller window.
+WORKDAY_BELL = "08:00"
+ATTENDANCE_TIME = "18:00"
+ATTENDANCE_ENABLED = True
+
 PERMITS_ENABLED = True
 PERMIT_MIN_DAYS = 4          # even a tiny project gets this long
 PERMIT_SHIFTS_PER_DAY = 8    # window = max(MIN, work / this), in days
@@ -388,6 +398,12 @@ CHAOS = {
         "group_leak": 2,            # a private text gets forwarded to Pepperton_Gossip
         "dead_air": 1,              # the radio is static all day
         "stranger": 1,              # someone steps off the bus
+        "heist": 0,                 # the lockbox is forced in the night —
+                                    # weight 0: NEVER random. The Director
+                                    # (you) fires it deliberately:
+                                    #   /api/chaos {"event": "heist"}
+                                    # No culprit exists. The town will
+                                    # invent one. That's the show.
     },
     "max_strangers": 2,
 }

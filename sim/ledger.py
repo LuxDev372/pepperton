@@ -175,6 +175,8 @@ class Ledger:
             # the fund that pays the public workers ("to encourage")
             tax = round(paid * getattr(config, "INCOME_TAX", 0.15), 2)
             agent.money += paid - tax
+            self.world.earned_today[agent.name] = \
+                self.world.earned_today.get(agent.name, 0.0) + paid - tax
             if tax > 0:
                 self.tills[config.TOWN_FUND] = round(
                     self.tills.get(config.TOWN_FUND, 0.0) + tax, 2)
@@ -216,6 +218,9 @@ class Ledger:
                         self.tills[config.TOWN_FUND] = round(
                             self.tills.get(config.TOWN_FUND, 0.0) + tax, 2)
                 creditor.money += payment - tax
+                self.world.earned_today[creditor.name] = \
+                    self.world.earned_today.get(creditor.name, 0.0) \
+                    + payment - tax
             if debt["amount"] <= 0.01:
                 debt["amount"] = 0.0
                 debt["status"] = "paid"

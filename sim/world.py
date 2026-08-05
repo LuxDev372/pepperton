@@ -97,6 +97,13 @@ class World:
                 proj["permit_due"] = self.clock.day + self.permit_window(
                     proj["work"])
         self._permit_day_done = 0
+        # the Working Day: who clocked in today, what they earned, and
+        # each worker's running absence streak (public record)
+        self.worked_today = set()
+        self.earned_today = {}
+        self.absence_streaks = {}
+        self._bell_day_done = 0
+        self._attendance_day_done = 0
         # economics live in sim/ledger.py; the World only hosts the physics
         self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
@@ -183,6 +190,76 @@ class World:
                   f"bought {item} at {agent.location} (-${cost}) — "
                   f"earned money, spent well", agent.location)
         return True, f"bought {item} (-${cost}); it's theirs now"
+
+    # --------------------------------------------- the working day (v2.6)
+    def morning_bell(self):
+        """08:00: every employed villager is reminded the shift starts —
+        and that the town notices who shows. Resets the day's attendance."""
+        if not getattr(config, "ATTENDANCE_ENABLED", True):
+            return
+        day = self.clock.day
+        if self._bell_day_done >= day:
+            return
+        self._bell_day_done = day
+        self.worked_today = set()
+        self.earned_today = {}
+        for worker in self.agents.values():
+            workplace = worker.workplace()
+            if not workplace:
+                continue
+            streak = self.absence_streaks.get(worker.name, 0)
+            streak_bit = (f" You haven't opened those doors in {streak} "
+                          f"days, and the ledger says so in public."
+                          if streak >= 2 else "")
+            worker.pending.append({
+                "text": (f"The morning bell: your shift at {workplace} "
+                         f"starts now. The town posts the attendance ledger "
+                         f"every evening — who worked, who didn't."
+                         f"{streak_bit}"),
+                "interrupt": worker.money < config.MEAL_COST,
+                "sim_time": self.clock.hhmm,
+            })
+
+    def attendance_ledger(self):
+        """18:00: the day's labor, posted town-wide. Presence earns public
+        credit; absence earns a public count."""
+        if not getattr(config, "ATTENDANCE_ENABLED", True):
+            return
+        day = self.clock.day
+        if self._attendance_day_done >= day:
+            return
+        self._attendance_day_done = day
+        showed, absent = [], []
+        for worker in self.agents.values():
+            workplace = worker.workplace()
+            if not workplace:
+                continue
+            if worker.name in self.worked_today:
+                self.absence_streaks[worker.name] = 0
+                earned = self.earned_today.get(worker.name, 0.0)
+                showed.append(f"{worker.name.split()[0]} ({workplace}"
+                              + (f", +${earned:.0f}" if earned else "") + ")")
+            else:
+                self.absence_streaks[worker.name] = \
+                    self.absence_streaks.get(worker.name, 0) + 1
+                run = self.absence_streaks[worker.name]
+                absent.append(f"{workplace} — {worker.name.split()[0]} absent"
+                              + (f", day {run} running" if run > 1 else ""))
+        if not showed and not absent:
+            return
+        lines = []
+        if showed:
+            lines.append("ON SHIFT today: " + "; ".join(showed) + ".")
+        if absent:
+            lines.append("DOORS NEVER OPENED: " + "; ".join(absent) + ".")
+        text = "ATTENDANCE LEDGER — " + " ".join(lines)
+        self.emit("world", None, text, "the plaza")
+        for villager in self.agents.values():
+            villager.pending.append({
+                "text": f"The evening attendance ledger is posted: {text}",
+                "interrupt": False,
+                "sim_time": self.clock.hhmm,
+            })
 
     # -------------------------------------------------- permits (v2.4)
     @staticmethod
@@ -1017,6 +1094,7 @@ class World:
                                f"goodwill, or see the bank)")
         agent.activity = {"type": "work", "until_tick": self.tick_no + 16,
                           "note": action.get("note", "")}
+        self.worked_today.add(agent.name)
         self.emit("action", agent.name, f"started a shift at {wp}", wp)
         return True, f"working at {wp}"
 

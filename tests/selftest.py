@@ -464,6 +464,51 @@ def _old_config_boot():
 
 _old_config_boot()
 
+# ---- appended by v2.6: the Working Day + the heist ----
+def _working_day():
+    fresh_data()
+    e = Engine(seed=91)
+    w = e.world
+    workers = [a for a in w.agents.values() if a.workplace()]
+    a = workers[0]
+
+    # the bell queues a reminder for every employed villager
+    w.clock.day = 2
+    w.morning_bell()
+    belled = [x for x in workers
+              if any("morning bell" in p["text"] for p in x.pending)]
+    check("the morning bell rings for the employed",
+          len(belled) == len(workers), f"{len(belled)}/{len(workers)}")
+
+    # attendance: one works, the rest are posted absent
+    w.execute(a, {"action": "move", "to": a.workplace()})
+    w.execute(a, {"action": "work"})
+    w.attendance_ledger()
+    ledger_ev = [ev for ev in w.events
+                 if "ATTENDANCE LEDGER" in str(ev.get("text", ""))]
+    check("the attendance ledger posts town-wide",
+          len(ledger_ev) == 1 and a.name.split()[0] in ledger_ev[0]["text"]
+          and "DOORS NEVER OPENED" in ledger_ev[0]["text"],
+          ledger_ev[0]["text"][:70] if ledger_ev else "no ledger")
+    absent_worker = next(x for x in workers if x.name != a.name)
+    check("absence streaks count in public",
+          w.absence_streaks.get(absent_worker.name) == 1 and
+          w.absence_streaks.get(a.name) == 0, "")
+
+    # the heist: god-button only, drains the fund, tells everyone
+    check("the heist never fires at random",
+          config.CHAOS["weights"].get("heist") == 0, "")
+    fund0 = w.tills[config.TOWN_FUND]
+    result = e.director.trigger("heist")
+    took = fund0 - w.tills[config.TOWN_FUND]
+    heist_ev = [ev for ev in w.events
+                if "FORCED IN THE NIGHT" in str(ev.get("text", ""))]
+    check("the lockbox job takes real money, publicly",
+          took > 0 and len(heist_ev) == 1 and "heist" in result, result[:50])
+    fresh_data()
+
+_working_day()
+
 # ---- appended by v2.5: Creature Comforts ----
 def _goods():
     fresh_data()

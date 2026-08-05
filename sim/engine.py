@@ -156,6 +156,11 @@ class Engine:
             world.ledger.rent_day_done = state.get("rent_day_done", 0)
             world.ledger.swept_day = state.get("ledger_day_done", 0)
             world._permit_day_done = state.get("permit_day_done", 0)
+            world.worked_today = set(state.get("worked_today", []))
+            world.earned_today = state.get("earned_today", {})
+            world.absence_streaks = state.get("absence_streaks", {})
+            world._bell_day_done = state.get("bell_day_done", 0)
+            world._attendance_day_done = state.get("attendance_day_done", 0)
             # the Fall Fair Act reaches back: incomplete projects from
             # before v2.4 get permits stamped with a FRESH window from
             # today — the fall fair finally hears a clock ticking
@@ -263,6 +268,11 @@ class Engine:
             "rent_day_done": self.world.ledger.rent_day_done,
             "ledger_day_done": self.world.ledger.swept_day,
             "permit_day_done": self.world._permit_day_done,
+            "worked_today": sorted(self.world.worked_today),
+            "earned_today": self.world.earned_today,
+            "absence_streaks": self.world.absence_streaks,
+            "bell_day_done": self.world._bell_day_done,
+            "attendance_day_done": self.world._attendance_day_done,
         }
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -495,6 +505,11 @@ class Engine:
                 self.world.morning_ledger()
         if self.world.clock.at("08:00"):
             self.world.permit_sweep()
+        if getattr(config, "ATTENDANCE_ENABLED", True):
+            if self.world.clock.at(getattr(config, "WORKDAY_BELL", "08:00")):
+                self.world.morning_bell()
+            if self.world.clock.at(getattr(config, "ATTENDANCE_TIME", "18:00")):
+                self.world.attendance_ledger()
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
