@@ -107,7 +107,8 @@ async def casts():
         "cast": getattr(config, "CAST", None),
         "providers": {k: v.get("api", "ollama") for k, v in known.items()},
         "minds": sorted(pool.values(), key=lambda m: m["model"]),
-        "chaos": sorted(config.CHAOS.get("weights", {})),
+        "chaos": sorted(m[4:] for m in dir(type(engine.director))
+                        if m.startswith("_ev_")),
     }
 
 
@@ -116,7 +117,13 @@ async def chaos(body: dict = None):
     """Manually fire a Director event. Body: {"event": "stranger"} or empty
     for a random weighted roll. You are the god of this town; use it wisely."""
     name = (body or {}).get("event")
-    known = set(config.CHAOS.get("weights", {}))
+    # Validate against the Director's actual handlers, not the config's
+    # weight table — an old town config predates newer events (the heist
+    # taught us this: weight-0 god-button events aren't in old configs,
+    # but the code can still fire them). Config weights only steer the
+    # random roll; the god button answers to the code.
+    known = {m[4:] for m in dir(type(engine.director))
+             if m.startswith("_ev_")}
     if name and name not in known:
         return JSONResponse({"error": f"unknown event {name!r}",
                              "known": sorted(known)}, status_code=400)
