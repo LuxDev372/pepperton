@@ -221,9 +221,15 @@ def _economy():
         return round(sum(x.money for x in w.agents.values())
                      + sum(w.tills.values()), 2)
     t0 = total()
+    bus0 = getattr(e.bus, "brought_in", 0.0)
     e.run_headless(192)
     t1 = total()
-    check("money is conserved (closed loop)", abs(t0 - t1) < 0.01,
+    # v2.8: the loop is no longer sealed — the coach route carries money
+    # in from outside. It must still BALANCE: every dollar in the town is
+    # a dollar that was here before or a dollar a tourist spent.
+    t1 -= round(getattr(e.bus, "brought_in", 0.0) - bus0, 2)
+    check("money is conserved (closed loop + audited bus inflow)",
+          abs(t0 - t1) < 0.01,
           f"start ${t0} -> end ${t1}")
     config.CHAOS["enabled"] = True
 
@@ -724,9 +730,109 @@ def _old_config_boot_v27():
             config.HIRING_ENABLED = had_hire
     fresh_data()
 
+def _bus_route():
+    """v2.8: outside money, and it only enters through an open door."""
+    from sim import bus as busmod
+    fresh_data()
+    e = Engine(seed=81)
+    w = e.world
+    c = busmod.cfg()
+
+    # a shut town earns NOTHING from a busload of money
+    w.clock.day = c["every_days"] * 3       # an arrival day
+    e.bus.day_done = 0
+    tills0 = dict(w.tills)
+    e.bus._arrive(c)
+    check("the coach arrives with visitors", e.bus.visiting >= c["visitors"][0],
+          f"{e.bus.visiting} aboard")
+    for _ in range(6):
+        e.bus._shop(c)
+    check("closed doors take no money from tourists",
+          all(w.tills[k] == tills0[k] for k in tills0),
+          str({k: w.tills[k] for k in tills0})[:70])
+    e.bus._depart()
+    left_broke = [ev for ev in w.events
+                  if "found every door shut" in str(ev.get("text", ""))]
+    check("the town is told the bus left with the money",
+          len(left_broke) == 1, "")
+
+    # now open a door: money flows, and ONLY to the open business
+    worker = next(a for a in w.agents.values()
+                  if a.workplace() and a.workplace() in w.tills
+                  and not w.locations.get(a.workplace(), {}).get("bank"))
+    shop = worker.workplace()
+    worker.location = shop
+    w.execute(worker, {"action": "work"})
+    w.clock.day += c["every_days"]
+    e.bus.day_done = 0
+    e.bus._arrive(c)
+    before = dict(w.tills)
+    for _ in range(6):
+        e.bus._shop(c)
+    gained = {k: round(w.tills[k] - before.get(k, 0), 2)
+              for k in w.tills if round(w.tills[k] - before.get(k, 0), 2) > 0}
+    check("an open door takes the tourists' money",
+          w.tills[shop] > before[shop], f"{shop}: +${gained.get(shop, 0)}")
+    check("money reaches ONLY the business that opened",
+          set(gained) <= {shop}, str(gained)[:70])
+
+    # the receipts are public, and the departure names the takings
+    e.bus._depart()
+    receipts = [ev for ev in w.events
+                if "left $" in str(ev.get("text", ""))
+                and "in this town today" in str(ev.get("text", ""))]
+    check("the takings are read out town-wide", len(receipts) == 1,
+          receipts[0]["text"][:70] if receipts else "no receipt event")
+
+    # the chain that saves a bartender: work an empty till for IOUs,
+    # tourists arrive, the till fills, back wages settle automatically
+    barkeep = next((a for a in w.agents.values()
+                    if a.workplace() and w.locations.get(
+                        a.workplace(), {}).get("bar")), None)
+    if barkeep:
+        bar = barkeep.workplace()
+        w.tills[bar] = 0.0
+        barkeep.location = bar
+        barkeep.money = 0.0
+        w.execute(barkeep, {"action": "work"})
+        w.pay_wage(barkeep, 6)
+        owed = w.wage_debt_of(bar)
+        check("an empty till pays in IOUs, not cash",
+              owed > 0 and barkeep.money == 0, f"owed ${owed}")
+        w.clock.day += c["every_days"]
+        e.bus.day_done = 0
+        e.bus._arrive(c)
+        for _ in range(8):
+            e.bus._shop(c)
+        check("tourist money settles the back wages automatically",
+              barkeep.money > 0 and w.wage_debt_of(bar) < owed,
+              f"${barkeep.money:.2f} paid, ${w.wage_debt_of(bar):.2f} left")
+    fresh_data()
+
+def _old_config_boot_v28():
+    """A config written before the bus route must boot and run a day."""
+    fresh_data()
+    had_bus = getattr(config, "BUS", None)
+    try:
+        if hasattr(config, "BUS"):
+            del config.BUS
+        e = Engine(seed=82)
+        e.world.clock.day = 4
+        for _ in range(40):
+            e.step()
+        check("a pre-bus config boots and ticks clean", True, "")
+    except Exception as exc:
+        check("a pre-bus config boots and ticks clean", False, repr(exc))
+    finally:
+        if had_bus is not None:
+            config.BUS = had_bus
+    fresh_data()
+
 _holt_act()
 _situations_vacant()
 _old_config_boot_v27()
+_bus_route()
+_old_config_boot_v28()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

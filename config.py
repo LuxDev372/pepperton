@@ -297,6 +297,23 @@ FORECLOSURE = {
     "min_debt": 12,       # the bank doesn't take houses over pocket change
 }
 
+# The Bus Route (v2.8): the town's first customers from outside itself.
+# Pepperton's money was a closed loop — seven broke people trying to be
+# each other's economy — so the coach route reopens. Sightseers arrive on
+# a rhythm with money from elsewhere (the only faucet in this world) and
+# spend an afternoon. They buy ONLY from businesses that are open, and a
+# business is open when a villager is standing in it working. Nothing
+# explains this to anyone. The receipts are the argument.
+BUS = {
+    "enabled": True,
+    "every_days": 2,        # a rhythm, not a windfall
+    "arrive": "11:00",
+    "depart": "16:00",
+    "visitors": [4, 8],
+    "spend": [4, 9],
+    "buys_per_visitor": 2,
+}
+
 # Situations Vacant (v2.7, same statute): a law with teeth owes the
 # toothless a way to earn. Any job in WORKPLACES that nobody holds is
 # OPEN — an unemployed villager claims it by walking in and using the

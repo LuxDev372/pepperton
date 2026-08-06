@@ -7,6 +7,7 @@ import time
 import config
 from sim import brains
 from sim.agents import generate_cast
+from sim.bus import BusRoute
 from sim.director import Director
 from sim.memory import MemoryStore
 from sim.radio import Radio
@@ -96,6 +97,7 @@ class Engine:
         self.brains = {a.name: brains.build_brain(a, self.seed) for a in cast}
         self.radio = Radio(self.seed)
         self.director = Director(self, self.seed)
+        self.bus = BusRoute(self.world, random.Random(f"bus:{self.seed}"))
         self.paused = False
         self.running = False
         self.lock = threading.RLock()   # guards world/brains vs API threads
@@ -171,6 +173,13 @@ class Engine:
                             proj.get("permit_due") is None:
                         proj["permit_due"] = world.clock.day + \
                             world.permit_window(proj["work"])
+            bus_state = state.get("bus") or {}
+            self.bus.day_done = bus_state.get("day_done", 0)
+            self.bus.visiting = bus_state.get("visiting", 0)
+            self.bus.spent_today = bus_state.get("spent_today", {})
+            self.bus.brought_in = bus_state.get("brought_in", 0.0)
+            if bus_state.get("rng"):
+                self.bus.rng.setstate(_rng_load(bus_state["rng"]))
             self._reflected_day = state.get("reflected_day", 0)
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
@@ -274,6 +283,13 @@ class Engine:
             "absence_streaks": self.world.absence_streaks,
             "bell_day_done": self.world._bell_day_done,
             "attendance_day_done": self.world._attendance_day_done,
+            "bus": {
+                "day_done": self.bus.day_done,
+                "visiting": self.bus.visiting,
+                "spent_today": self.bus.spent_today,
+                "brought_in": self.bus.brought_in,
+                "rng": _rng_dump(self.bus.rng.getstate()),
+            },
         }
         tmp = STATE_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -511,6 +527,7 @@ class Engine:
                 self.world.morning_bell()
             if self.world.clock.at(getattr(config, "ATTENDANCE_TIME", "18:00")):
                 self.world.attendance_ledger()
+        self.bus.step()   # the coach route (v2.8) — outside money, open doors
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
