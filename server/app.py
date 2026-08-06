@@ -22,6 +22,12 @@ async def _startup():
     engine.start_background()
 
 
+@app.on_event("shutdown")
+async def _shutdown():
+    if engine is not None:
+        engine.stop()
+
+
 @app.get("/")
 async def index():
     return FileResponse(os.path.join(_STATIC, "index.html"))
