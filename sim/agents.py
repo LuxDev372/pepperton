@@ -37,6 +37,7 @@ class Agent:
         # inspector breadcrumbs
         self.last_prompt = ""
         self.last_reply = ""
+        self.last_source = None   # 'model' | 'understudy' | 'possessed'
         self.last_reason = ""
         self.last_action = None
 

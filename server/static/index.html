@@ -671,7 +671,16 @@ function renderVitals(v) {
   const fcCls = (v.days_since_foreclosure != null && v.days_since_foreclosure <= 2)
               ? "bad" : "";
   const flowCls = v.outside_flow < 0 ? "bad" : v.outside_flow > 0 ? "good" : "";
+  // MINDS FIRST. If this cell is red, every number to its right is
+  // evidence about a script, not about a town.
+  const m = v.minds || {};
+  const mindsCls = (m.total && m.live < m.total) ? "bad" : "good";
+  const mindsTitle = (m.understudied && m.understudied.length)
+    ? "understudied: " + m.understudied.join(", ") : "all villagers on their own models";
   box.innerHTML = [
+    '<div class="v ' + mindsCls + '" title="' + mindsTitle + '"><b>'
+      + (m.live == null ? "?" : m.live) + "/" + (m.total || "?")
+      + '</b><span>minds live</span></div>',
     cell("on shift", worked + "/" + employed, workCls),
     cell("turned away", v.turned_away_today || 0, v.turned_away_today ? "warn" : ""),
     cell("longest absence", (v.longest_absence || 0) + "d",

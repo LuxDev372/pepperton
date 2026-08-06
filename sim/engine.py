@@ -53,7 +53,7 @@ _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "location", "money", "pantry", "needs", "asleep", "activity",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
                  "last_say", "last_text", "soapbox", "last_decision_tick",
-                 "pending", "urgent_flag", "possessions"]
+                 "pending", "urgent_flag", "possessions", "last_source"]
 
 
 def _mock_with_rng(brain):
@@ -569,6 +569,7 @@ class Engine:
             action, raw, reason = brain.decide(agent, self.world, perceptions, memories)
             agent.last_reason = reason
             agent.last_decision_tick = self.world.tick_no
+            self._record_provenance(agent, reason)
             ok, summary = self.world.execute(agent, action)
             if (action or {}).get("action") in ("say", "text"):
                 agent.talk_streak += 1
@@ -739,6 +740,63 @@ class Engine:
             "vitals": self.vitals(),
         }
 
+    @staticmethod
+    def decision_source(reason):
+        """Who actually chose: the villager's own model, or a stand-in.
+
+        This exists because a ten-day experiment was silently corrupted.
+        Ollama's request queue overflowed under three towns' load; the
+        engine treated a rejected request exactly like a dead host and
+        quietly seated MockBrain. Mock is deliberately lifelike — it goes
+        to work between 8 and noon, it buys a cheap house when it's flush
+        — so for days we watched a script and called it character. Nothing
+        in the transcript said otherwise, because nothing in the transcript
+        recorded WHO was thinking. Now it does.
+        """
+        r = (reason or "").lower()
+        if r.startswith("possessed"):
+            return "possessed"
+        if "understudy acted" in r or r.startswith("mock"):
+            return "understudy"
+        if "unparseable" in r:
+            return "unparsed"
+        if "host unreachable" in r:
+            return "dark"
+        return "model"
+
+    def _record_provenance(self, agent, reason):
+        src = self.decision_source(reason)
+        was = getattr(agent, "last_source", None)
+        agent.last_source = src
+        if was is not None and was != src:
+            # a mind going dark or coming back is worth a line in run.log —
+            # it is the difference between a finding and an artifact
+            if src == "model":
+                print(f"[MINDS] {agent.name}: own model has the wheel again "
+                      f"({agent.model}@{agent.host})", flush=True)
+            elif src in ("understudy", "dark"):
+                print(f"[MINDS] {agent.name}: {agent.model}@{agent.host} "
+                      f"failed — {src} is acting. Anything this villager "
+                      f"does now is NOT evidence.", flush=True)
+
+    def minds_report(self):
+        """Per-villager provenance, for the vitals strip and any experiment
+        that wants to know whether its instruments were honest."""
+        agents = list(self.world.agents.values())
+        by_src = {}
+        for a in agents:
+            by_src.setdefault(getattr(a, "last_source", None) or "unknown",
+                              []).append(a.name)
+        live = len(by_src.get("model", [])) + len(by_src.get("possessed", []))
+        return {
+            "live": live,
+            "total": len(agents),
+            "understudied": sorted(by_src.get("understudy", [])
+                                   + by_src.get("dark", [])),
+            "unparsed": sorted(by_src.get("unparsed", [])),
+            "unknown": sorted(by_src.get("unknown", [])),
+        }
+
     def vitals(self):
         """Aggregate town health, at a glance.
 
@@ -795,6 +853,7 @@ class Engine:
             "town_fund": round(world.tills.get(config.TOWN_FUND, 0.0), 2),
             "poor_box": round(world.tills.get(
                 getattr(config, "POOR_BOX", "the poor box"), 0.0), 2),
+            "minds": self.minds_report(),
         }
 
     def inspect(self, name):
@@ -843,6 +902,7 @@ class Engine:
             "last_action": a.last_action,
             "last_prompt": a.last_prompt,
             "last_reply": a.last_reply,
+            "source": getattr(agent, "last_source", None),
             "memory_count": self.memory.count(name),
             "recent_memories": self.memory.recent(name, 20),
             "debts_owed": self.world.open_debts(debtor=name),

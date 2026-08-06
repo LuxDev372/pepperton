@@ -1176,10 +1176,67 @@ def _vitals():
           f"{v['worked_today']}/{v['employed']}")
     fresh_data()
 
+def _provenance():
+    """v2.9.4: the instrument that would have saved ten days.
+
+    A queue overflow seated MockBrain silently for days. Mock is written to
+    be lifelike — it goes to work between 8 and noon, it buys a cheap house
+    when flush — so the transcript looked like character and was script.
+    Nothing recorded WHO decided. Now everything does."""
+    fresh_data()
+    e = Engine(seed=92)
+    w = e.world
+
+    cases = {
+        "model decision": "model",
+        "host unreachable; understudy acted: mock: starting shift": "understudy",
+        "mock: bedtime": "understudy",
+        "host unreachable": "dark",
+        "unparseable reply": "unparsed",
+        "possessed: external action": "possessed",
+    }
+    bad = {r: e.decision_source(r) for r, want in cases.items()
+           if e.decision_source(r) != want}
+    check("every decision reason is classified", not bad, str(bad)[:90])
+
+    # a town of live minds reports itself clean
+    for a in w.agents.values():
+        e._record_provenance(a, "model decision")
+    rep = e.minds_report()
+    check("all-live reads live", rep["live"] == rep["total"] == len(w.agents)
+          and not rep["understudied"], str(rep)[:80])
+
+    # one villager drops to the understudy and the town says so
+    victim = next(iter(w.agents.values()))
+    e._record_provenance(
+        victim, "host unreachable; understudy acted: mock: starting shift")
+    rep = e.minds_report()
+    check("a single dark mind is named, not averaged away",
+          rep["live"] == len(w.agents) - 1 and
+          rep["understudied"] == [victim.name], str(rep)[:80])
+    check("the villager carries the mark",
+          victim.last_source == "understudy", str(victim.last_source))
+
+    # and the observatory sees it on the strip
+    v = e.vitals()
+    check("minds reach the vitals strip",
+          v["minds"]["live"] == len(w.agents) - 1 and
+          victim.name in v["minds"]["understudied"], str(v["minds"])[:80])
+
+    # provenance survives a restart — an experiment spanning a bounce must
+    # not forget that its instruments were leaking
+    e.save_state()
+    e2 = Engine(state=Engine.load_state())
+    check("provenance survives a restart",
+          e2.world.agents[victim.name].last_source == "understudy",
+          str(e2.world.agents[victim.name].last_source))
+    fresh_data()
+
 _crane_bonus()
 _tibbs_door()
 _review_fixes_v292()
 _vitals()
+_provenance()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
