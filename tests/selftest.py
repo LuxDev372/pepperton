@@ -1223,6 +1223,27 @@ def _provenance():
           v["minds"]["live"] == len(w.agents) - 1 and
           victim.name in v["minds"]["understudied"], str(v["minds"])[:80])
 
+    # THE SLEEPING ARE NOT MISSING. Every town read 6/7 red overnight
+    # because one villager was in bed and therefore unstamped.
+    for a in w.agents.values():
+        e._record_provenance(a, "model decision")
+    sleeper = next(iter(w.agents.values()))
+    sleeper.asleep = True
+    sleeper.last_source = None          # asleep, so never stamped
+    rep = e.minds_report()
+    check("a sleeping villager is not a missing mind",
+          rep["live"] == rep["awake"] == len(w.agents) - 1 and
+          rep["asleep"] == 1 and rep["state"] == "good", str(rep)[:100])
+    sleeper.asleep = False
+    check("but an awake villager not yet observed is only amber",
+          e.minds_report()["state"] == "warn", "")
+    e._record_provenance(sleeper, "host unreachable; understudy acted: mock")
+    check("and a faked villager is red",
+          e.minds_report()["state"] == "bad", "")
+    # put the mark back on the victim: the restart check below needs it
+    e._record_provenance(
+        victim, "host unreachable; understudy acted: mock: starting shift")
+
     # provenance survives a restart — an experiment spanning a bounce must
     # not forget that its instruments were leaking
     e.save_state()

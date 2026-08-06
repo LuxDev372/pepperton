@@ -781,20 +781,38 @@ class Engine:
 
     def minds_report(self):
         """Per-villager provenance, for the vitals strip and any experiment
-        that wants to know whether its instruments were honest."""
+        that wants to know whether its instruments were honest.
+
+        The denominator is the AWAKE, because a sleeping villager makes no
+        decisions and therefore carries no stamp. Counting the sleeping as
+        missing minds turned a quiet night into a red alarm, and an alarm
+        that cries wolf is worse than no alarm at all. (Caught by Brad, who
+        noticed every town reading 6/7 had exactly one villager in bed.)
+        """
         agents = list(self.world.agents.values())
+        awake = [a for a in agents if not a.asleep]
         by_src = {}
-        for a in agents:
+        for a in awake:
             by_src.setdefault(getattr(a, "last_source", None) or "unknown",
                               []).append(a.name)
+        understudied = sorted(by_src.get("understudy", [])
+                              + by_src.get("dark", []))
+        unparsed = sorted(by_src.get("unparsed", []))
+        unknown = sorted(by_src.get("unknown", []))
         live = len(by_src.get("model", [])) + len(by_src.get("possessed", []))
+        # red only when somebody is genuinely being faked; amber while a
+        # waking villager has yet to be observed; green otherwise
+        state = ("bad" if (understudied or unparsed)
+                 else "warn" if unknown else "good")
         return {
             "live": live,
+            "awake": len(awake),
             "total": len(agents),
-            "understudied": sorted(by_src.get("understudy", [])
-                                   + by_src.get("dark", [])),
-            "unparsed": sorted(by_src.get("unparsed", [])),
-            "unknown": sorted(by_src.get("unknown", [])),
+            "asleep": len(agents) - len(awake),
+            "state": state,
+            "understudied": understudied,
+            "unparsed": unparsed,
+            "unknown": unknown,
         }
 
     def vitals(self):

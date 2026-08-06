@@ -674,12 +674,19 @@ function renderVitals(v) {
   // MINDS FIRST. If this cell is red, every number to its right is
   // evidence about a script, not about a town.
   const m = v.minds || {};
-  const mindsCls = (m.total && m.live < m.total) ? "bad" : "good";
-  const mindsTitle = (m.understudied && m.understudied.length)
-    ? "understudied: " + m.understudied.join(", ") : "all villagers on their own models";
+  // denominator is the AWAKE — the sleeping decide nothing and are not
+  // missing. Red means someone is genuinely being faked.
+  const mindsCls = m.state || ((m.awake && m.live < m.awake) ? "bad" : "good");
+  const bits = [];
+  if (m.understudied && m.understudied.length)
+    bits.push("UNDERSTUDIED (not evidence): " + m.understudied.join(", "));
+  if (m.unparsed && m.unparsed.length) bits.push("unparseable: " + m.unparsed.join(", "));
+  if (m.unknown && m.unknown.length) bits.push("not yet observed: " + m.unknown.join(", "));
+  if (m.asleep) bits.push(m.asleep + " asleep (decide nothing)");
+  const mindsTitle = bits.length ? bits.join(" · ") : "every waking villager on their own model";
   box.innerHTML = [
     '<div class="v ' + mindsCls + '" title="' + mindsTitle + '"><b>'
-      + (m.live == null ? "?" : m.live) + "/" + (m.total || "?")
+      + (m.live == null ? "?" : m.live) + "/" + (m.awake == null ? (m.total || "?") : m.awake)
       + '</b><span>minds live</span></div>',
     cell("on shift", worked + "/" + employed, workCls),
     cell("turned away", v.turned_away_today || 0, v.turned_away_today ? "warn" : ""),
