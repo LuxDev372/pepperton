@@ -293,4 +293,35 @@ check("background persistence failures stop the town",
       failed_background.world._closed)
 failed_background.stop()
 
+migration_state = Engine.load_state()
+migration_state["world_id"] = "legacy"
+migration_state.pop("schema_version", None)
+original_migrate_projections = TownStore.migrate_legacy_projections
+original_store_close = TownStore.close
+closed_failed_stores = []
+
+
+def fail_migration(store):
+    raise RuntimeError("simulated migration failure")
+
+
+def track_store_close(store):
+    closed_failed_stores.append(store)
+    original_store_close(store)
+
+
+TownStore.migrate_legacy_projections = fail_migration
+TownStore.close = track_store_close
+try:
+    Engine(state=migration_state)
+except RuntimeError:
+    migration_failed = True
+else:
+    migration_failed = False
+finally:
+    TownStore.migrate_legacy_projections = original_migrate_projections
+    TownStore.close = original_store_close
+check("failed bootstrap migration closes its SQLite store",
+      migration_failed and len(closed_failed_stores) == 1)
+
 print("TownStore proof complete")

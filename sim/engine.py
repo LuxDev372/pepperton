@@ -93,14 +93,18 @@ class Engine:
         else:
             cast = generate_cast(self.seed)
         self.store = TownStore(world_id=self.world_id, state_path=STATE_PATH)
-        if state and state.get("_legacy_identity_pending"):
-            # Persist the new identity before claiming ambiguous legacy
-            # projections. If migration is interrupted, the marker makes the
-            # operation safely retry on the next start.
-            self.store.save_checkpoint(state)
-            self.store.migrate_legacy_projections()
-            state.pop("_legacy_identity_pending", None)
-            self.store.save_checkpoint(state)
+        try:
+            if state and state.get("_legacy_identity_pending"):
+                # Persist the new identity before claiming ambiguous legacy
+                # projections. If migration is interrupted, the marker makes
+                # the operation safely retry on the next start.
+                self.store.save_checkpoint(state)
+                self.store.migrate_legacy_projections()
+                state.pop("_legacy_identity_pending", None)
+                self.store.save_checkpoint(state)
+        except Exception:
+            self.store.close()
+            raise
         self.world = World(cast, world_id=self.world_id, store=self.store)
         self.world.engine = self   # backref: the ledger writes memories
         self.memory = self.store.memory
