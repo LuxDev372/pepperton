@@ -1374,8 +1374,46 @@ _tibbs_door()
 _review_fixes_v292()
 _vitals()
 _provenance()
+def _town_report():
+    """v3.0.1: the report is how a private terrarium becomes shareable.
+    Read-only — it must never write into a town's data directory."""
+    import subprocess
+    fresh_data()
+    e = Engine(seed=94)
+    e.run_headless(120)
+    e.save_state()
+    from sim.world import World
+    World.close_all()
+    data_dir = os.path.join(SCRATCH, "data")
+    before = sorted(os.listdir(data_dir))
+    out = os.path.join(SCRATCH, "report.html")
+    proc = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "tools", "townreport.py"),
+         "--data", data_dir, "--out", out, "--town", "Testville"],
+        capture_output=True, text=True, cwd=ROOT)
+    check("the town report builds from a data directory",
+          proc.returncode == 0 and os.path.exists(out),
+          (proc.stderr or proc.stdout)[-90:])
+    if os.path.exists(out):
+        page = open(out, encoding="utf-8").read()
+        check("it is one self-contained file — no scripts, no network",
+              "<script" not in page and "http://" not in page
+              and "https://" not in page and "src=" not in page, "")
+        check("it carries the cast, the laws and the money",
+              "Testville" in page and "WHO LIVES HERE" in page.upper()
+              and "THE LAWS THAT FIRED" in page.upper()
+              and "<svg" in page, "")
+        check("and it renders in both light and dark",
+              "prefers-color-scheme: dark" in page
+              and 'data-theme="dark"' in page, "")
+    check("the report NEVER writes into the town's data directory",
+          sorted(os.listdir(data_dir)) == before,
+          str(set(os.listdir(data_dir)) ^ set(before)))
+    fresh_data()
+
 _townsfolk()
 _no_charity_from_the_gods()
+_town_report()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
