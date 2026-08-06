@@ -1226,8 +1226,21 @@ class World:
             return False, f"can't work here — their work is at {wp}"
         if getattr(config, "ECONOMY", False):
             till_key = self._wage_till_key(agent)
-            if self.tills.get(till_key, 0.0) <= 0 and \
-                    self.wage_debt_of(till_key) >= config.WAGE_DEBT_CAP:
+            dry = (self.tills.get(till_key, 0.0) <= 0 and
+                   self.wage_debt_of(till_key) >= config.WAGE_DEBT_CAP)
+            # THE TIBBS DOOR (v2.9.1). Vera Tibbs of Pompeii showed up for
+            # her shift at the Rusty Tap three times in one day — the third
+            # time with five paying tourists standing in the plaza — and the
+            # payroll rule turned her away at her own door every time. It
+            # didn't just refuse to pay her; it refused to let her OPEN, so
+            # the till could never fill, so tomorrow she'd be refused again.
+            # A dry till is a reason to work unpaid and hope for customers.
+            # It is not a reason to lock the door. Showing up always opens
+            # the door now; only the wage is in doubt.
+            # Public payroll is the one exception: there is no door at the
+            # park for a customer to walk through, so a broke town really
+            # can't take you on. A SHOP can always open and hope.
+            if dry and till_key == config.TOWN_FUND:
                 where = ("the town" if till_key == config.TOWN_FUND
                          else till_key)
                 agent.activity = {"type": "idle",
@@ -1245,6 +1258,16 @@ class World:
         agent.activity = {"type": "work", "until_tick": self.tick_no + 16,
                           "note": action.get("note", "")}
         self.worked_today.add(agent.name)
+        if getattr(config, "ECONOMY", False) and \
+                self.tills.get(self._wage_till_key(agent), 0.0) <= 0:
+            self.emit("action", agent.name,
+                      f"opened {wp} on an empty till — the doors are open "
+                      f"and the register is dry. Somebody has to be here "
+                      f"when a customer walks in.", wp)
+            return True, (f"working at {wp} on an empty register — no wage "
+                          f"in hand until a customer spends here, but the "
+                          f"DOORS ARE OPEN and anything the till takes "
+                          f"settles what you're owed")
         self.emit("action", agent.name, f"started a shift at {wp}", wp)
         return True, f"working at {wp}"
 

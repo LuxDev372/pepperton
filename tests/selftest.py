@@ -918,8 +918,69 @@ _holt_act()
 _situations_vacant()
 _old_config_boot_v27()
 _bus_route()
+def _tibbs_door():
+    """v2.9.1: a dry till may withhold the WAGE. It may not lock the DOOR.
+    (Vera Tibbs, Pompeii Day 70 — sent home three times, the last with five
+    paying tourists standing in the plaza.)"""
+    from sim import bus as busmod
+    fresh_data()
+    e = Engine(seed=84)
+    w = e.world
+    barkeep = next(a for a in w.agents.values()
+                   if a.workplace() and a.workplace() in w.tills
+                   and not w.locations.get(a.workplace(), {}).get("bank"))
+    bar = barkeep.workplace()
+
+    # a dead till, over the wage-debt cap — the old "sent home" state
+    w.tills[bar] = 0.0
+    w.add_debt(bar, barkeep.name, config.WAGE_DEBT_CAP + 10,
+               f"back wages at {bar}")
+    barkeep.location = bar
+    barkeep.money = 0.0
+    ok, note = w.execute(barkeep, {"action": "work"})
+    check("a dry till no longer locks the door", ok and
+          barkeep.name in w.worked_today and
+          (barkeep.activity or {}).get("type") == "work", note[:80])
+    check("the villager is told the register is dry, not that they're fired",
+          "DOORS ARE OPEN" in note, note[:60])
+    open_ev = [ev for ev in w.events
+               if "on an empty till" in str(ev.get("text", ""))]
+    check("opening on an empty register is a public act", len(open_ev) == 1,
+          open_ev[0]["text"][:70] if open_ev else "no event")
+
+    # and now the whole point: tourists can find that door
+    c = busmod.cfg()
+    e.bus.visiting = 5
+    e.bus.spent_today = {}
+    for _ in range(6):
+        e.bus._shop(c)
+    check("an open door on a dead till takes the tourists' money",
+          e.bus.brought_in > 0,
+          f"${e.bus.brought_in:.2f} came off the bus")
+    # the till reads empty afterward because the money did not STOP there —
+    # it passed straight through the register into the pocket of the person
+    # who opened the door on an empty one. That is the whole chain.
+    check("and the takings settle what the worker was owed",
+          barkeep.money > 0 and w.wage_debt_of(bar) < config.WAGE_DEBT_CAP,
+          f"${barkeep.money:.2f} in hand, ${w.wage_debt_of(bar):.2f} still owed")
+
+    # public payroll keeps the old law: no door at the park to open
+    public = next((a for a in w.agents.values()
+                   if a.workplace() and w._wage_till_key(a) == config.TOWN_FUND
+                   and a.name != barkeep.name), None)
+    if public:
+        w.tills[config.TOWN_FUND] = 0.0
+        w.add_debt(config.TOWN_FUND, public.name,
+                   config.WAGE_DEBT_CAP + 10, "back wages at the town fund")
+        public.location = public.workplace()
+        ok2, note2 = w.execute(public, {"action": "work"})
+        check("a broke town can still send a public worker home",
+              not ok2 and "no shifts today" in note2, note2[:60])
+    fresh_data()
+
 _old_config_boot_v28()
 _crane_bonus()
+_tibbs_door()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
