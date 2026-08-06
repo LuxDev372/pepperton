@@ -1,16 +1,16 @@
 """The tick loop — where Pepperton actually happens."""
 
 import random
+import sqlite3
 import threading
-import time
 
 import config
 from sim import brains
 from sim.agents import generate_cast
 from sim.bus import BusRoute
 from sim.director import Director
-from sim.memory import MemoryStore
 from sim.radio import Radio
+from sim.store import TownStore
 from sim.world import World
 
 # importance heuristics for stored memories
@@ -21,7 +21,7 @@ _IMPORTANCE = {
 }
 
 
-STATE_PATH = "data/world_state.json"
+STATE_PATH = getattr(config, "STATE_PATH", "data/world_state.json")
 
 
 def _rng_dump(state):
@@ -70,8 +70,9 @@ def _mock_with_rng(brain):
 class Engine:
     def __init__(self, seed=None, state=None):
         if state:
+            state = TownStore.migrate_checkpoint(state)
             self.seed = state["seed"]
-            self.world_id = state.get("world_id", "legacy")
+            self.world_id = state["world_id"]
         else:
             self.seed = seed if seed is not None else random.randrange(1 << 30)
             import uuid
@@ -91,15 +92,29 @@ class Engine:
                 cast.append(a)
         else:
             cast = generate_cast(self.seed)
-        self.world = World(cast, world_id=self.world_id)
+        self.store = TownStore(world_id=self.world_id, state_path=STATE_PATH)
+        try:
+            if state and state.get("_legacy_identity_pending"):
+                # Persist the new identity before claiming ambiguous legacy
+                # projections. If migration is interrupted, the marker makes
+                # the operation safely retry on the next start.
+                self.store.save_checkpoint(state)
+                self.store.migrate_legacy_projections()
+                state.pop("_legacy_identity_pending", None)
+                self.store.save_checkpoint(state)
+        except Exception:
+            self.store.close()
+            raise
+        self.world = World(cast, world_id=self.world_id, store=self.store)
         self.world.engine = self   # backref: the ledger writes memories
-        self.memory = MemoryStore(world_id=self.world_id)
+        self.memory = self.store.memory
         self.brains = {a.name: brains.build_brain(a, self.seed) for a in cast}
         self.radio = Radio(self.seed)
         self.director = Director(self, self.seed)
         self.bus = BusRoute(self.world, random.Random(f"bus:{self.seed}"))
         self.paused = False
         self.running = False
+        self._stop_event = threading.Event()
         self.lock = threading.RLock()   # guards world/brains vs API threads
         self._cmdq = []                 # API writes, applied between ticks
         self._cmdlock = threading.Lock()   # guards _cmdq only — never held
@@ -111,33 +126,22 @@ class Engine:
         if state:
             world = self.world
             restored_tick = state["tick_no"]
-            # reconcile: erase any "memories from the future" written after
-            # the checkpoint we are restoring to (crash-recovery integrity)
-            dropped = self.memory.delete_after(restored_tick)
-            if dropped:
-                print(f"[ENGINE] reconciled {dropped} future memories "
-                      f"(post-tick-{restored_tick} timeline erased)", flush=True)
-            # backfill the event feed from the transcript (this world's
-            # lines only, and none from the abandoned future)
-            try:
-                import json as _json
-                with open(config.TRANSCRIPT_JSONL, encoding="utf-8") as f:
-                    lines = f.readlines()
-                evs = []
-                for line in lines:
-                    try:
-                        e = _json.loads(line)
-                    except ValueError:
-                        continue
-                    if e.get("wid", "legacy") == self.world_id and \
-                            e.get("tick", 0) <= restored_tick:
-                        evs.append(e)
-                evs = evs[-150:]
-                if evs:
-                    world.events = evs
-                    world._event_seq = max(e.get("seq", 0) for e in evs)
-            except OSError:
-                pass
+            restored_event_seq = state.get("event_seq")
+            dropped_events = self.store.rewind_event_tail(
+                restored_tick, restored_event_seq, world_id=self.world_id)
+            dropped_memories = self.memory.delete_after(
+                restored_tick, state.get("memory_seq"))
+            if dropped_events or dropped_memories:
+                print(f"[ENGINE] reconciled {dropped_events} future events "
+                      f"and {dropped_memories} future memories "
+                      f"(post-checkpoint timeline erased)", flush=True)
+            # Backfill the rolling UI feed from the surviving durable stream.
+            evs = self.store.read_events(
+                world_id=self.world_id, max_tick=restored_tick)[-150:]
+            if evs:
+                world.events = evs
+            world._event_seq = state.get(
+                "event_seq", max((e.get("seq", 0) for e in evs), default=0))
             world.tick_no = state["tick_no"]
             world.clock.day = state["day"]
             world.clock.minutes = state["minutes"]
@@ -245,8 +249,6 @@ class Engine:
 
     # ------------------------------------------------------------- persist
     def save_state(self):
-        import json as _json
-        import os as _os
         agents = {}
         for a in self.world.agents.values():
             af = {f: getattr(a, f) for f in _AGENT_FIELDS}
@@ -268,6 +270,8 @@ class Engine:
                 "brains": brains_rng,
             },
             "tick_no": self.world.tick_no,
+            "event_seq": self.world._event_seq,
+            "memory_seq": self.memory.high_watermark(),
             "day": self.world.clock.day,
             "minutes": self.world.clock.minutes,
             "locations": self.world.locations,
@@ -302,22 +306,11 @@ class Engine:
                 "rng": _rng_dump(self.bus.rng.getstate()),
             },
         }
-        tmp = STATE_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            _json.dump(state, f)
-        _os.replace(tmp, STATE_PATH)
+        self.store.save_checkpoint(state)
 
     @staticmethod
     def load_state():
-        import json as _json
-        import os as _os
-        if not _os.path.exists(STATE_PATH):
-            return None
-        try:
-            with open(STATE_PATH, encoding="utf-8") as f:
-                return _json.load(f)
-        except (ValueError, OSError):
-            return None
+        return TownStore.load_checkpoint_file(STATE_PATH)
 
     # ------------------------------------------------------------ memory
     def _remember(self, agent, kind, text, importance):
@@ -653,6 +646,9 @@ class Engine:
                     traceback.print_exc()
 
     def start_background(self):
+        if self.world._closed:
+            raise RuntimeError("cannot restart a closed engine")
+        self._stop_event.clear()
         self.running = True
 
         def loop():
@@ -663,6 +659,14 @@ class Engine:
                     try:
                         with self.lock:
                             self.step()
+                    except (OSError, sqlite3.Error):
+                        self.running = False
+                        print(f"[ENGINE] fatal persistence failure at tick "
+                              f"{self.world.tick_no + 1}; town stopped:",
+                              flush=True)
+                        traceback.print_exc()
+                        self.world.close()
+                        return
                     except Exception:
                         # one bad tick must NEVER kill a town — log and live on
                         print(f"[ENGINE] tick {self.world.tick_no + 1} crashed "
@@ -672,17 +676,28 @@ class Engine:
                         try:
                             self.save_state()
                         except Exception:
-                            pass
+                            self.running = False
+                            print("[ENGINE] checkpoint failed; town stopped "
+                                  "before advancing beyond unsaved state:",
+                                  flush=True)
+                            traceback.print_exc()
+                            self.world.close()
+                            return
                 # between ticks the lock is free — apply anything the
                 # observatory asked for while the town was thinking.
                 self._drain_commands()
-                time.sleep(pace)
+                self._stop_event.wait(pace)
 
         self._thread = threading.Thread(target=loop, daemon=True, name="pepperton-engine")
         self._thread.start()
 
     def stop(self):
         self.running = False
+        self._stop_event.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+        self.world.close()
 
     # ------------------------------------------------------------- state
     def snapshot(self, since_seq=0):

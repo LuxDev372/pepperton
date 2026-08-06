@@ -46,25 +46,90 @@ class MemoryStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_mem_agent ON memories(agent, tick)"
         )
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS legacy_world_claims ("
+            "source TEXT PRIMARY KEY, world_id TEXT NOT NULL)"
+        )
         self._conn.commit()
 
     def add(self, agent, tick, day, sim_time, kind, text, importance):
         with self._lock:
             self._conn.execute(
-                "INSERT INTO memories (agent, tick, day, sim_time, kind, text, importance, world_id)"
-                " VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO memories (agent, tick, day, sim_time, kind, text, "
+                "importance, world_id) VALUES (?,?,?,?,?,?,?,?)",
                 (agent, tick, day, sim_time, kind, text, float(importance),
                  self.world_id),
             )
             self._conn.commit()
 
-    def delete_after(self, tick):
-        """Reconcile after a crash-restore: memories from the abandoned
-        future timeline are removed so nobody remembers what never happened."""
+    def migrate_legacy_world(self, world_id):
+        """Claim unscoped pre-TownStore memories for one restored town.
+
+        Legacy rows cannot be separated after the fact if several old towns
+        shared one database. Claiming them once is safer than leaving every
+        newly restored town attached to the shared ``legacy`` scope.
+        """
         with self._lock:
             cur = self._conn.execute(
-                "DELETE FROM memories WHERE world_id=? AND tick>?",
-                (self.world_id, int(tick)),
+                "UPDATE memories SET world_id=? WHERE world_id='legacy'",
+                (world_id,),
+            )
+            self._conn.commit()
+            return cur.rowcount
+
+    def legacy_memory_count(self):
+        with self._lock:
+            (count,) = self._conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE world_id='legacy'"
+            ).fetchone()
+        return count
+
+    def legacy_world_claim(self):
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT world_id FROM legacy_world_claims "
+                "WHERE source='pre-townstore'"
+            ).fetchone()
+        return row[0] if row else None
+
+    def claim_legacy_world(self, world_id):
+        """Record the one town allowed to adopt ambiguous legacy rows."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO legacy_world_claims(source, world_id) "
+                "VALUES ('pre-townstore', ?)", (world_id,))
+            row = self._conn.execute(
+                "SELECT world_id FROM legacy_world_claims "
+                "WHERE source='pre-townstore'"
+            ).fetchone()
+            self._conn.commit()
+        return row[0] if row else None
+
+    def high_watermark(self):
+        """Return the latest durable memory row owned by this town."""
+        with self._lock:
+            (memory_id,) = self._conn.execute(
+                "SELECT COALESCE(MAX(id), 0) FROM memories WHERE world_id=?",
+                (self.world_id,),
+            ).fetchone()
+        return memory_id
+
+    def delete_after(self, tick, memory_id=None):
+        """Reconcile after a crash-restore: memories from the abandoned
+        future timeline are removed so nobody remembers what never happened.
+
+        The row watermark handles writes later in the checkpoint's tick.
+        """
+        with self._lock:
+            future_clauses = ["tick>?"]
+            params = [self.world_id, int(tick)]
+            if memory_id is not None:
+                future_clauses.append("id>?")
+                params.append(int(memory_id))
+            cur = self._conn.execute(
+                "DELETE FROM memories WHERE world_id=? AND (" +
+                " OR ".join(future_clauses) + ")",
+                params,
             )
             self._conn.commit()
         return cur.rowcount
@@ -90,7 +155,8 @@ class MemoryStore:
                 (agent, day, self.world_id),
             ).fetchall()
         return [
-            {"sim_time": r[0], "kind": r[1], "text": r[2], "importance": r[3]}
+            {"sim_time": r[0], "kind": r[1], "text": r[2],
+             "importance": r[3]}
             for r in rows
         ]
 
@@ -134,3 +200,7 @@ class MemoryStore:
                 (agent, self.world_id),
             ).fetchone()
         return n
+
+    def close(self):
+        with self._lock:
+            self._conn.close()
