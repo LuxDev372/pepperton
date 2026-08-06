@@ -1273,11 +1273,12 @@ def _townsfolk():
         e.folk.ensure()
         names = [p["name"] for p in e.folk.people]
         check("the town has townsfolk", len(names) == 6, ", ".join(names)[:70])
-        check("ROSIE EXISTS", "Rosie" in names,
-              "the diner has been named for her since line one of config")
-        rosie = next(p for p in e.folk.people if p["name"] == "Rosie")
-        check("and she stands behind her own counter",
-              "Rosie" in rosie["location"] and rosie["fixed"], rosie["location"])
+        # SOME MYSTERIES ARE LOAD-BEARING. v3.0.0 gave Rosie a body; an
+        # external reviewer talked us out of it before anyone met her.
+        check("ROSIE IS NOT AMONG THEM, AND NEVER WILL BE",
+              "Rosie" not in names and
+              not any(p.get("fixed") for p in e.folk.people),
+              "she is a hole in the data model, and that is the point")
 
         # a SHUT door is witnessed, and no money moves
         shop = next(k for k, v in w.locations.items()

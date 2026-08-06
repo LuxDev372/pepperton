@@ -106,15 +106,25 @@ class Townsfolk:
         self._seeded = True
         world = self.world
         public = world.public_locations() or ["the plaza"]
-        # Rosie exists at last. Every town has a diner named for her and
-        # nobody has ever met her; she has been the richest entity in the
-        # multiverse and a hole in the data model. She stands behind her
-        # own counter now.
-        diner = next((k for k, v in world.locations.items()
-                      if v.get("sells_food") and "Rosie" in k), None)
-        if diner:
-            self.people.append({"name": "Rosie", "why": "runs the place",
-                                "location": diner, "fixed": True})
+        # ROSIE IS NOT HERE, AND WILL NOT BE.
+        #
+        # v3.0.0 gave her a body — a proprietor behind her own counter. It
+        # was a delightful idea and it was wrong, and an external reviewer
+        # caught it before anybody ever met her: "Do not explain Rosie. Do
+        # not instantiate Rosie. Some mysteries are load-bearing."
+        #
+        # He is right. She adds nothing mechanical that any of the six below
+        # do not. What she subtracts is the truest thing this project has
+        # noticed about itself: every town has a diner named for a woman
+        # nobody has ever met, she holds more money than every living soul
+        # combined, she has never worked a shift or paid a cent of tax, and
+        # she is a hole in the data model where an owner should be. That
+        # absence is the argument for business ownership. A body would just
+        # be scenery.
+        #
+        # It was also a straight violation of this project's own rule —
+        # watch before you build — committed four hours after writing it
+        # down. Removed while still dark; she was never seen.
         pool = list(_NAMES)
         for _ in range(max(0, c["count"] - len(self.people))):
             if not pool:
