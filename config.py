@@ -317,6 +317,32 @@ LOYALTY = {
     "milestone_bonus": 15,   # paid from the town fund when a step is earned
 }
 
+# The Townsfolk (v3.0): scripted residents who make a town a town. Zero
+# GPU, seeded, deterministic. They are PRESENT so a room is not empty,
+# they TRY DOORS and are seen finding them open or shut, they SPEAK TO
+# villagers (a stranger wanting something from you is a different prompt
+# than a friend describing his hunger), and they OFFER PAID WORK in
+# person with the cash in hand.
+#
+# THE RULE, and it is not negotiable — Brad, Day 91: "no charity what so
+# ever. work-reward." An NPC never gives a villager anything they did not
+# earn. No gifts, no free meals, no jar donations, no rescues. Money
+# crosses a counter or pays for labour, and takes no other path.
+#
+# Ships DARK. Arm it deliberately.
+TOWNSFOLK = {
+    "enabled": False,
+    "count": 6,
+    "spend": [3, 7],
+    "move_chance": 0.35,
+    "shop_chance": 0.18,
+    "shut_quiet_ticks": 24,
+    "speak_chance": 0.12,
+    "oddjob_chance": 0.05,
+    "oddjob_pay": [4, 8],
+    "oddjob_expires": 8,
+}
+
 # The Bus Route (v2.8): the town's first customers from outside itself.
 # Pepperton's money was a closed loop — seven broke people trying to be
 # each other's economy — so the coach route reopens. Sightseers arrive on
@@ -455,7 +481,6 @@ CHAOS = {
     "weights": {
         "anonymous_text": 3,        # a villager gets a text from an unknown number
         "rumor_seed": 3,            # someone could SWEAR they saw something last night
-        "windfall": 2,              # found money
         "duck_omen": 2,             # something is wrong at the pond
         "group_leak": 2,            # a private text gets forwarded to Pepperton_Gossip
         "dead_air": 1,              # the radio is static all day

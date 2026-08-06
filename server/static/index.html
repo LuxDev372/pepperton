@@ -497,6 +497,11 @@ function slotInBuilding(b, idx, count) {
 function updateAgentTargets(snap) {
   const byLoc = {};
   for (const a of snap.agents) (byLoc[a.location] = byLoc[a.location] || []).push(a);
+  // Townsfolk share the map but must NEVER be mistaken for a mind. Same
+  // principle as the MINDS cell: scenery is drawn as scenery.
+  for (const p of (snap.townsfolk || []))
+    (byLoc[p.location] = byLoc[p.location] || []).push(
+      { name: p.name, location: p.location, npc: true, job: p.why });
   const now = performance.now();
   for (const locName in byLoc) {
     const group = byLoc[locName].slice().sort((p, q) => p.name.localeCompare(q.name));
@@ -520,10 +525,12 @@ function updateAgentTargets(snap) {
       dot.asleep = !!a.asleep;
       dot.job = a.job;
       dot.activity = a.activity;
+      dot.npc = !!a.npc;
     });
   }
   // drop dots for agents no longer present
   const names = new Set(snap.agents.map((a) => a.name));
+  for (const p of (snap.townsfolk || [])) names.add(p.name);
   for (const k of state.agents.keys()) if (!names.has(k)) state.agents.delete(k);
 }
 
@@ -1135,6 +1142,25 @@ function drawBuilding(name, b, night) {
 }
 
 function drawAgent(dot, name, now, night) {
+  // TOWNSFOLK ARE NOT MINDS AND MUST NEVER LOOK LIKE ONE. Smaller, grey,
+  // hollow, translucent, no shadow. Same principle as the MINDS cell on
+  // the vitals strip: you should never have to wonder whether the thing
+  // you are watching is thinking. (v3.0)
+  if (dot.npc) {
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = night ? "rgba(150,160,172,0.85)" : "rgba(130,140,152,0.9)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(dot.x, dot.y, 4.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(150,160,172,0.75)";
+    ctx.font = "9px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(firstName(name), dot.x, dot.y + 15);
+    ctx.restore();
+    return;
+  }
   const r = 7;
   const asleep = dot.asleep;
   ctx.save();

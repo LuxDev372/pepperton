@@ -11,6 +11,7 @@ from sim.bus import BusRoute
 from sim.director import Director
 from sim.memory import MemoryStore
 from sim.radio import Radio
+from sim.townsfolk import Townsfolk
 from sim.world import World
 
 # importance heuristics for stored memories
@@ -98,6 +99,9 @@ class Engine:
         self.radio = Radio(self.seed)
         self.director = Director(self, self.seed)
         self.bus = BusRoute(self.world, random.Random(f"bus:{self.seed}"))
+        self.folk = Townsfolk(self.world,
+                              random.Random(f"townsfolk:{self.seed}"))
+        self.world.folk = self.folk   # the work verb reaches odd jobs
         self.paused = False
         self.running = False
         self.lock = threading.RLock()   # guards world/brains vs API threads
@@ -166,6 +170,14 @@ class Engine:
             world.turned_away_today = set(state.get("turned_away_today", []))
             world.outside_flow = state.get("outside_flow", 0.0)
             world.last_foreclosure_day = state.get("last_foreclosure_day", 0)
+            tf = state.get("townsfolk") or {}
+            self.folk.people = tf.get("people", [])
+            self.folk.offers = tf.get("offers", {})
+            self.folk.brought_in = tf.get("brought_in", 0.0)
+            self.folk._seeded = tf.get("seeded", False)
+            self.folk._shut_said = tf.get("shut_said", {})
+            if tf.get("rng"):
+                self.folk.rng.setstate(_rng_load(tf["rng"]))
             if hasattr(self.radio, "_used"):
                 self.radio._used = set(state.get("radio_used", []))
             world._bell_day_done = state.get("bell_day_done", 0)
@@ -291,6 +303,14 @@ class Engine:
             "turned_away_today": sorted(self.world.turned_away_today),
             "outside_flow": self.world.outside_flow,
             "last_foreclosure_day": self.world.last_foreclosure_day,
+            "townsfolk": {
+                "people": self.folk.people,
+                "offers": self.folk.offers,
+                "brought_in": self.folk.brought_in,
+                "seeded": self.folk._seeded,
+                "shut_said": self.folk._shut_said,
+                "rng": _rng_dump(self.folk.rng.getstate()),
+            },
             "radio_used": sorted(getattr(self.radio, "_used", set())),
             "bell_day_done": self.world._bell_day_done,
             "attendance_day_done": self.world._attendance_day_done,
@@ -547,6 +567,7 @@ class Engine:
             if self.world.clock.at(getattr(config, "ATTENDANCE_TIME", "18:00")):
                 self.world.attendance_ledger()
         self.bus.step()   # the coach route (v2.8) — outside money, open doors
+        self.folk.step()  # the townsfolk (v3.0) — presence, doors, odd jobs
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
@@ -738,6 +759,7 @@ class Engine:
                 "promises": [p for p in world.promises if p["status"] == "open"][-10:],
             } if getattr(config, "ECONOMY", False) else None),
             "vitals": self.vitals(),
+            "townsfolk": self.folk.snapshot(),
         }
 
     @staticmethod

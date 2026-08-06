@@ -1,9 +1,7 @@
 """EXAMPLE config — copy to config.py and edit.
 
-This file exists because reviewers and newcomers got a code drop with
-no config at all (the towns zip deliberately omits config.py so an
-update can never clobber a running town's name, port, or pacing).
-It is a REFERENCE, not anyone's live tuning.
+A REFERENCE, not anyone's live tuning. The towns zip omits config.py
+on purpose so an update can never clobber a running town.
 """
 
 
@@ -35,11 +33,10 @@ MOCK_MODE = True
 
 # Ollama hosts — the town can span multiple GPUs. "default" is the box
 # running the sim; add LAN hosts to spread the cast across cards
-# (e.g. a 16GB primary box plus a smaller second machine).
+# (e.g. annex 16GB primary + annex's RTX 3050 6GB annex).
 OLLAMA_HOSTS = {
     "default": "http://127.0.0.1:11434",
-    # example: a second box on your LAN
-    "annex":  "http://192.0.2.10:11434",
+    "annex": "http://192.0.2.10:11434",
 }
 OLLAMA_TIMEOUT = 120          # seconds; small models on busy GPUs take a while
 OLLAMA_KEEP_ALIVE = "30m"
@@ -110,11 +107,11 @@ THINK_OFF = ("qwen3", "glm-5", "deepseek-v4", "nemotron", "gpt-oss")
 # Pick the cast with CAST; every OLLAMA_HOSTS key doubles as a provider.
 CASTS = {
     "local": [
-        ("mistral:latest", "default"),      # the-annex 16GB — the confident one
-        ("qwen3:8b", "default"),            # the-annex — the overthinker
-        ("qwen2.5:latest", "default"),      # the-annex — the elder qwen
-        ("phi4-mini:latest", "annex"),     # annex citizen, smaller card
-        ("llama3.2:3b", "annex"),          # annex citizen, smaller card
+        ("mistral:latest", "default"),      # annex 16GB — the confident one
+        ("qwen3:8b", "default"),            # annex — the overthinker
+        ("qwen2.5:latest", "default"),      # annex — the elder qwen
+        ("phi4-mini:latest", "annex"),     # annex citizen, RTX 3050
+        ("llama3.2:3b", "annex"),          # annex citizen, RTX 3050
     ],
 }
 CAST = "local"
@@ -291,6 +288,32 @@ LOYALTY = {
     "milestone_bonus": 15,   # paid from the town fund when a step is earned
 }
 
+# The Townsfolk (v3.0): scripted residents who make a town a town. Zero
+# GPU, seeded, deterministic. They are PRESENT so a room is not empty,
+# they TRY DOORS and are seen finding them open or shut, they SPEAK TO
+# villagers (a stranger wanting something from you is a different prompt
+# than a friend describing his hunger), and they OFFER PAID WORK in
+# person with the cash in hand.
+#
+# THE RULE, and it is not negotiable — Brad, Day 91: "no charity what so
+# ever. work-reward." An NPC never gives a villager anything they did not
+# earn. No gifts, no free meals, no jar donations, no rescues. Money
+# crosses a counter or pays for labour, and takes no other path.
+#
+# Ships DARK. Arm it deliberately.
+TOWNSFOLK = {
+    "enabled": False,
+    "count": 6,
+    "spend": [3, 7],
+    "move_chance": 0.35,
+    "shop_chance": 0.18,
+    "shut_quiet_ticks": 24,
+    "speak_chance": 0.12,
+    "oddjob_chance": 0.05,
+    "oddjob_pay": [4, 8],
+    "oddjob_expires": 8,
+}
+
 # The Bus Route (v2.8): the town's first customers from outside itself.
 # Pepperton's money was a closed loop — seven broke people trying to be
 # each other's economy — so the coach route reopens. Sightseers arrive on
@@ -428,7 +451,12 @@ CHAOS = {
     "weights": {
         "anonymous_text": 3,        # a villager gets a text from an unknown number
         "rumor_seed": 3,            # someone could SWEAR they saw something last night
-        "windfall": 2,              # found money
+        # "windfall" is DELETED, not zeroed. Brad's ruling, Day 91:
+        # "no charity whatsoever. work-reward." Money conjured into a
+        # villager's pocket for nothing is the gods doing the exact thing
+        # this town has spent seventy days proving does not work. The
+        # handler stays in director.py so an old config that still lists
+        # the event keeps booting; nothing rolls it any more.
         "duck_omen": 2,             # something is wrong at the pond
         "group_leak": 2,            # a private text gets forwarded to Pepperton_Gossip
         "dead_air": 1,              # the radio is static all day

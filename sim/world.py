@@ -1261,6 +1261,16 @@ class World:
         return out
 
     def _verb_work(self, agent, action):
+        # An odd job takes priority over everything: a townsperson is
+        # standing right here with cash in hand for an hour's work. It is
+        # the only money in this world that reaches a villager without a
+        # shift, a till, or a wage — and it is still EARNED. (v3.0)
+        folk = getattr(self, "folk", None)
+        if folk is not None and folk.offer_at(agent.location):
+            ok, note = folk.take_offer(agent, agent.location)
+            if ok:
+                self.worked_today.add(agent.name)
+                return True, note
         wp = agent.workplace()
         if not wp and getattr(config, "HIRING_ENABLED", True):
             openings = self.open_positions()

@@ -1253,11 +1253,129 @@ def _provenance():
           str(e2.world.agents[victim.name].last_source))
     fresh_data()
 
+def _townsfolk():
+    """v3.0: the town gets people in it. Ships dark. NEVER gives charity."""
+    from sim import townsfolk as tfmod
+    fresh_data()
+    e = Engine(seed=93)
+    w = e.world
+
+    check("the townsfolk ship dark",
+          config.TOWNSFOLK["enabled"] is False and not e.folk.people, "")
+    e.folk.step()
+    check("a dark town has nobody in it", not e.folk.people, "")
+
+    old = dict(config.TOWNSFOLK)
+    try:
+        config.TOWNSFOLK = dict(old, enabled=True, count=6,
+                                shop_chance=1.0, move_chance=0.0,
+                                speak_chance=0.0, oddjob_chance=0.0)
+        e.folk.ensure()
+        names = [p["name"] for p in e.folk.people]
+        check("the town has townsfolk", len(names) == 6, ", ".join(names)[:70])
+        check("ROSIE EXISTS", "Rosie" in names,
+              "the diner has been named for her since line one of config")
+        rosie = next(p for p in e.folk.people if p["name"] == "Rosie")
+        check("and she stands behind her own counter",
+              "Rosie" in rosie["location"] and rosie["fixed"], rosie["location"])
+
+        # a SHUT door is witnessed, and no money moves
+        shop = next(k for k, v in w.locations.items()
+                    if v.get("bar") or (v.get("sells_food")
+                                        and "Rosie" not in k))
+        person = next(p for p in e.folk.people if not p["fixed"])
+        person["location"] = shop
+        w.tills[shop] = 0.0
+        e.folk._act(person, tfmod.cfg())
+        shut = [ev for ev in w.events
+                if "found it shut" in str(ev.get("text", ""))]
+        check("a closed door is SEEN to be tried and rejected",
+              len(shut) == 1 and w.tills[shop] == 0.0,
+              shut[0]["text"][:70] if shut else "no event")
+
+        # an OPEN door takes money, and it lands in the till, not a pocket
+        worker = next((a for a in w.agents.values()
+                       if a.workplace() == shop), None)
+        if worker:
+            worker.location = shop
+            worker.asleep = False
+            w.execute(worker, {"action": "work"})
+            before_till, before_purse = w.tills[shop], worker.money
+            flow0 = w.outside_flow
+            e.folk._act(person, tfmod.cfg())
+            check("an open door takes their money INTO THE TILL",
+                  w.tills[shop] > before_till, f"till ${w.tills[shop]:.2f}")
+            check("and the outside money is audited",
+                  abs((w.tills[shop] - before_till)
+                      - (w.outside_flow - flow0)) < 0.01, "")
+
+        # THE RULE, enforced against the source itself: there is exactly
+        # ONE line in this module that puts money into a villager's pocket,
+        # and it is inside take_offer — i.e. paid for work done.
+        src = open(os.path.join(ROOT, "sim", "townsfolk.py")).read()
+        body = src.split('"""', 2)[2]
+        pays = [ln.strip() for ln in body.splitlines() if ".money +=" in ln]
+        check("only ONE code path puts money in a villager's pocket",
+              len(pays) == 1, " | ".join(pays)[:80])
+        after_take = body.split("def take_offer", 1)
+        check("and that path is take_offer — payment for work done",
+              len(after_take) == 2 and ".money +=" in after_take[1]
+              and ".money +=" not in after_take[0], "")
+        check("the townsfolk never touch the poor box",
+              "POOR_BOX" not in body and "poor box" not in body.lower(), "")
+
+        # PAID WORK: the one way money reaches a villager without a till
+        config.TOWNSFOLK = dict(old, enabled=True, count=6, shop_chance=0.0,
+                                move_chance=0.0, speak_chance=0.0,
+                                oddjob_chance=1.0, oddjob_pay=[6, 6])
+        idler = next(a for a in w.agents.values() if not a.asleep)
+        person["location"] = idler.location
+        e.folk.offers = {}
+        e.folk._act(person, tfmod.cfg())
+        offer = e.folk.offer_at(idler.location)
+        check("a townsperson offers paid work, in person, cash in hand",
+              offer and offer["pay"] == 6, str(offer)[:70])
+        check("and the villagers in the room are told how to take it",
+              any("work action here" in p["text"] for p in idler.pending), "")
+        purse0, fund0 = idler.money, w.tills[config.TOWN_FUND]
+        ok, note = w.execute(idler, {"action": "work"})
+        check("working there EARNS it", ok and idler.money > purse0,
+              note[:70] if note else "")
+        check("the odd job is taxed like any other wage",
+              w.tills[config.TOWN_FUND] > fund0, "")
+        check("and it counts as having worked today",
+              idler.name in w.worked_today, "")
+        check("an offer is taken once and once only",
+              e.folk.offer_at(idler.location) is None, "")
+
+        # the map can tell scenery from a mind
+        snap = e._snapshot_locked()
+        check("townsfolk reach the map flagged as NPCs",
+              snap["townsfolk"] and all(p["npc"] for p in snap["townsfolk"]),
+              str(len(snap["townsfolk"])) + " on the map")
+        check("and they are NOT counted as minds",
+              snap["vitals"]["minds"]["total"] == len(w.agents), "")
+    finally:
+        config.TOWNSFOLK = old
+    fresh_data()
+
+def _no_charity_from_the_gods():
+    """Brad's ruling, Day 91: 'no charity what so ever. work-reward.'
+    The Director's windfall conjured money into a pocket for nothing."""
+    check("the gods no longer hand out free money",
+          "windfall" not in config.CHAOS["weights"],
+          str(sorted(config.CHAOS["weights"])))
+    check("but an old config that still lists it can boot",
+          hasattr(__import__("sim.director", fromlist=["Director"]),
+                  "Director"), "")
+
 _crane_bonus()
 _tibbs_door()
 _review_fixes_v292()
 _vitals()
 _provenance()
+_townsfolk()
+_no_charity_from_the_gods()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
