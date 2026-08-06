@@ -24,9 +24,16 @@ stringing a debtor along with an invented "lead," a folk belief that
 the park ducks are an intelligence network, hashtag activism, a
 faction schism, threats, a public pile-on that rewrote one villager's
 private debt into accepted fact, and the saddest diary entry ever
-written by a 3.8B-parameter mind. See [LORE.md](LORE.md) for the full
-chronicle — every law in this codebase was passed in response to a
-crime an actual villager committed.
+written by a 3.8B-parameter mind.
+
+Since then they have also produced: a bank foreclosing on four houses
+in a single morning, the only man who worked buying up the street one
+deed at a time, a bartender opening a bar with an empty register
+because *somebody has to be here when a customer walks in*, and a
+committee formed to hold a fundraiser in a universe that does not have
+fundraisers. See [LORE.md](LORE.md) for the full chronicle — every law
+in this codebase was passed in response to a crime an actual villager
+committed.
 
 ## Read this before running (security & scope)
 
@@ -60,6 +67,7 @@ OpenAI-compatible gateway (OpenRouter, Groq, ...) are one config entry
 each (see *Casts and providers* below). Mock mode needs nothing.
 
 ```
+cp config.example.py config.py   # then edit: town name, port, casting
 pip install -r requirements.txt
 python run.py                    # observatory at http://localhost:8811
 python run.py --headless 96      # one sim-day fast, no server (smoke test)
@@ -80,6 +88,12 @@ between temperaments is where the show comes from — cast in
 `config.py` (`MODEL_POOL`), spread across multiple GPUs via
 `OLLAMA_HOSTS` if you have them.
 
+Watch long enough and the families sort themselves. In three towns run
+side by side, the qwen-cast villagers are the ones who quietly go and
+do the thing; most of the others resolve *"I am hungry and broke"* into
+a paragraph about being hungry and broke. Nobody wrote that. It falls
+out of training.
+
 ### The control panel
 
 The observatory is no longer watch-only.
@@ -90,7 +104,7 @@ villager mid-run, memories and money and grudges intact.
 
 **Take the seat** (click a villager, top of the inspector) — possession
 with a UI. Pick a verb, fill in the fields it asks for, and the action
-lands on the next tick. All thirteen verbs are there; `text → everyone`
+lands on the next tick. Every verb is there; `text → everyone`
 posts to the town group chat, which is the surest way to be heard, since
 untargeted speech only reaches whoever is standing in the room.
 
@@ -124,9 +138,9 @@ not a code change. Every `OLLAMA_HOSTS` key is folded in automatically, so
 older configs keep working.
 
 A provider that is unreachable, unpaid, or missing its key does not stop
-the town: that villager quietly falls back to its mock understudy, and the
-reason shows up in the observatory's inspector. Check a cast for real
-before you run on it:
+the town: that villager quietly falls back to its mock understudy. **Read
+the next section before you trust a long run.** Check a cast for real
+before you start:
 
 ```bash
 python tests/brains_live.py               # the current cast
@@ -134,50 +148,163 @@ python tests/brains_live.py mixed         # some other cast
 python tests/brains_live.py mistral:latest@default   # one mind
 ```
 
+## ⚠ Know who is actually thinking
+
+The mock understudy is deliberately lifelike. It walks to work between
+8 and noon. It buys a foreclosed house when it is flush. It settles a
+debt when the creditor is standing right there.
+
+Which means a failing model does not look like a failure. It looks like
+a villager. We lost ten days of a careful experiment to exactly this:
+Ollama's request queue overflowed under load — *"maximum pending
+requests exceeded"* — the engine treated a rejected request like a dead
+host, seated the understudy, and two towns' worth of behaviour got
+narrated as emergent character when it was a script.
+
+So the town now records **provenance**. Every decision is stamped
+`model` / `understudy` / `dark` / `unparsed` / `possessed`, it survives
+a restart, the inspector shows it per villager, and `run.log` prints a
+line the moment a mind drops out or comes back:
+
+```
+[MINDS] Walt Crane: qwen2.5:latest@default failed — understudy is acting.
+        Anything this villager does now is NOT evidence.
+```
+
+The observatory's vitals strip leads with **MINDS LIVE** — green when
+every waking villager is on its own model, amber when someone hasn't
+been observed deciding yet, red the moment anybody is being faked.
+Sleeping villagers don't count against it; they decide nothing.
+
+**If that cell is red, everything to the right of it is a measurement of
+a script.** If you are running experiments rather than just watching a
+show, that distinction is the whole ballgame.
+
+## The vitals strip
+
+A one-line readout across the top of the observatory, because a town can
+be quietly dying in a way no single villager's dialogue will ever report.
+Minds live, on shift today, turned away, longest absence run, longest
+work run, median purse, poorest, richest, town fund, poor box, owed by
+villagers, unpaid wages, homeless, houses for sale, days since the last
+foreclosure, net money in from outside, lifetime bus takings.
+
+It exists because a real bug hid in plain sight: a town fund's back-wage
+debt climbed to five times its cap while the town *looked* recovered, and
+finding it required instrumenting the code by hand.
+
 ## What's in the box
 
 ```
 config.py          every knob: pacing (accelerated <-> realtime), casting,
-                   archetypes, town voice, needs, radio feeds, chaos weights
+                   archetypes, town voice, needs, radio feeds, chaos weights,
+                   economy, permits, goods, the working day, foreclosure,
+                   hiring, the bus route, the loyalty bonus
+config.example.py  a scrubbed reference copy — start here
 sim/world.py       locations, clock, and the physics that keep models honest
+sim/ledger.py      every dollar, debt and promise: tills, wages, rent, the
+                   bank, the debt market, foreclosure, redemption, deeds
+sim/bus.py         the coach route — outside money, and the open-door rule
 sim/memory.py      Stanford-style memory streams (recency+importance+relevance)
 sim/brains.py      LLMBrain (ollama + openai-compatible providers) /
                    MockBrain / ExternalBrain (possession seat)
-sim/engine.py      the tick loop, decision cadence, nightly reflections
+sim/engine.py      the tick loop, decision cadence, nightly reflections,
+                   provenance, town vitals
 sim/radio.py       real RSS headlines -> in-world bulletins (info has geography:
                    only villagers AT the radio hear the news)
 sim/director.py    the chaos engine: anonymous texts, planted rumors, leaks
-                   to the group chat, duck omens, dead air — and sometimes
-                   a stranger steps off the bus
+                   to the group chat, duck omens, dead air, a stranger off
+                   the bus — and the heist, which never fires on its own
 server/            FastAPI + websocket observatory (map, bubbles, transcript,
-                   click-a-villager inspector with raw prompts/replies)
+                   vitals strip, click-a-villager inspector with raw
+                   prompts/replies)
+tests/selftest.py  120+ regression checks, run from the project root
+tests/goldenhash.py  behavioural fingerprint: a pure refactor must not move it
 LORE.md            what happened in the first towns, and why each law exists
 ```
 
 ## The laws (a partial legal history)
 
-The anti-boring code, each statute named for its criminal:
+Each statute named for its criminal. The anti-boring code came first:
 the **Cal Amendment** (no infinite free meals), the **Repetition Act**,
 **Echo Ban**, **Paraphrase Act**, and **Soapbox Law** (no broken
 records, no parroting, no speeches to empty rooms), and the
 **Insomnia Clause** (no sleeping through your one wild and precious
-simulated life). Physics rejects the action and tells the model *why*,
-which becomes a memory, which changes behavior. Discipline through
-consequences, not prompt begging.
+simulated life).
 
-## The economy (v2.0 — the Invisible Hand)
+Then the civics arrived: the **Sam Fletcher Amendment** (*"I owe you
+one"* is warmth, not a contract — the ledger only wants money
+promises), the **Fall Fair Act** (permits, fines, condemnation), the
+**Holt Act** (foreclosure, below), and the **Tibbs Door** (a dry till
+may withhold your wage; it may not lock your door).
 
-Money is a closed loop: every dollar is in a pocket, a business till,
-or the town fund. Meals fill the diner's till; the till pays the
-cook's wages; rent (every 3 sim-days) refills the fund that pays the
-public workers. Dry tills issue back-pay IOUs into a public ledger,
-and businesses that can't make payroll stop offering shifts. The
-**First Bank** lends against the only credit score this town has —
-your build shifts on the notice board — and posts arrears publicly,
-because the ledger forgets nothing. Saying *"I'll pay you back"* out
-loud creates a recorded promise: keep it (the `pay` action) or the
-whole town learns what your word is worth. Nobody prints money.
-(The Director still can. The Director is not bound by economics.)
+Physics rejects the action and tells the model *why*, which becomes a
+memory, which changes behavior. Discipline through consequences, not
+prompt begging.
+
+## The economy
+
+**Money is a closed loop** (v2.0): every dollar is in a pocket, a
+business till, or the town fund. Meals fill the diner's till; the till
+pays the cook's wages; rent (every 3 sim-days) refills the fund that
+pays the public workers. Dry tills issue back-pay IOUs into a public
+ledger. The **First Bank** lends against the only credit score this
+town has — your build shifts on the notice board — and posts arrears
+publicly, because the ledger forgets nothing. Saying *"I'll pay you
+back"* out loud creates a recorded promise: keep it (the `pay` action)
+or the whole town learns what your word is worth.
+
+**Taxes and charity** (v2.1–2.2): a cut of every wage is withheld at
+the till and goes to the fund. Inns rent beds to the homeless. A **poor
+box** sits on the diner counter — donating is a public act, and the jar
+quietly buys meals for villagers who can't pay. It starts empty;
+charity is earned, not seeded.
+
+**Permits** (v2.4): proposing a project takes out a permit with a
+completion window. Miss it and the town fines you; miss it again and
+the thing is **condemned** — torn down, the slot freed, the
+contributors left to mourn.
+
+**Goods** (v2.5): a `buy` verb and things worth working for. A proper
+mattress (rest at home recovers faster), carpenter's tools (your first
+swing counts double), a fine hat, a pocket watch, a paperback novel —
+possessions show up in a villager's system prompt, so status is
+something they *know* about themselves.
+
+**The Working Day** (v2.6): a morning bell at 08:00, and at 18:00 the
+**attendance ledger** is posted town-wide — who worked, who didn't, and
+how many days running their doors have stayed shut. Absence is a public
+number now.
+
+**The Holt Act** (v2.7): the bank buys the town's unpaid rent at face
+value each morning. The fund gets cash; the bank gets paper with teeth.
+Sit on it past the grace window and the bank **levies your house** —
+door locked, home listed for sale at the teller window, you sleep
+where you can. Pay in full before it sells and the key comes back. If a
+neighbour buys it instead, the price goes against your debt and any
+surplus is honestly returned. A buyer who already has a home becomes a
+landlord; a bought deed ends rent forever. Named for a banker who was
+four cycles in arrears at a bank he had never once opened.
+
+**Situations Vacant** (v2.7, same statute): a law with teeth owes the
+toothless a way to earn. Any job nobody holds is open, and an
+unemployed villager claims it by walking in and working. Showing up is
+the interview. The bell and the evening ledger advertise the openings.
+
+**The Bus Route** (v2.8): the first customers from outside the world.
+Every second day a coach pulls into the plaza with sightseers carrying
+money from somewhere else — the one faucet in a closed economy. They
+buy **only** from a business that is open, and open means a villager is
+standing in it working. If every door in town is shut, they walk the
+whole place, buy nothing, and the bus takes their wallets with it —
+and the town is told exactly that. Nothing explains the mechanism to
+anyone. The receipts are the argument.
+
+The loop is deliberately opened and therefore **audited**: every dollar
+the bus brings in, the Director conjures, or the heist burns is netted
+in one counter, and the conservation test asserts
+`end == start + outside_flow`.
+
 `ECONOMY = False` in config restores the old open-faucet world.
 
 ## Phones & Pepperton_Gossip
@@ -200,6 +327,12 @@ is in nobody's contacts. You also get a god button:
 curl -X POST localhost:8811/api/chaos -d '{"event":"stranger"}' -H 'Content-Type: application/json'
 ```
 
+**The heist** is on that list at weight zero — it never fires on its
+own. Fire it by name and the town lockbox is forced overnight: most of
+the fund gone, no witnesses, no note, and **no culprit exists**. One
+villager wakes with a half-memory of a figure near somewhere, very
+late. The town will invent a suspect. That is the point.
+
 ## The possession seat
 
 Every villager's mind is pluggable. `POST /api/possess/{name}` lets an
@@ -214,12 +347,36 @@ of watching, great for active viewing) or `realtime` (their morning is
 your morning; read the transcript with your coffee like a newspaper
 from a parallel world).
 
+## Testing
+
+```bash
+python tests/selftest.py     # 120+ behavioural regressions
+python tests/goldenhash.py   # the fingerprint
+```
+
+`goldenhash.py` runs two seeded mock towns for 800 ticks each and hashes
+every event plus the final economic state. A **pure refactor must leave
+that hash identical.** A feature is expected to move it — record the new
+value in the commit message so the next person has a baseline. Both
+scripts run in a scratch directory and will never touch a live town.
+
+One hard rule, learned by crashing three running towns: **every new
+config knob must have a code default.** A config file written before a
+feature must boot and run untouched. There is a permanent test for it.
+
 ## Roadmap-shaped ideas
 
-Persistent crises (storms that stay broken until someone fixes them),
-rumor mutation across retellings, forked-timeline experiments (the
-determinism is already there), spectator/broadcast mode (let chat vote
-on Director events), more archetypes and locations, strangers with
-deeper cover stories, Rosie.
+Typed relationships (business / personal / romantic, both parties
+confirming independently), tenancy so a landlord can actually let a
+house, a loyalty bonus for showing up (built, shipped dark, waiting on
+an experiment), town councils, persistent crises, rumor mutation across
+retellings, forked-timeline experiments (the determinism is already
+there), a live map view, spectator mode, migration between towns over
+the same road the bus uses, and eventually the things that make a place
+a place rather than an economy: leisure, families, and a way for a town
+to lose someone.
+
+And Rosie. Every town has a diner named for her. Nobody has ever met
+her. She is the richest entity in the multiverse and she does not exist.
 
 MIT licensed. Bring your own GPU and your own sickness.
