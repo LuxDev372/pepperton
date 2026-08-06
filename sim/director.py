@@ -93,6 +93,7 @@ class Director:
             return "no one awake"
         amount = self.rng.choice([10, 15, 20])
         target.money += amount
+        world.outside_flow = round(world.outside_flow + amount, 2)
         world.emit("action", target.name,
                f"found ${amount} tucked in an old jacket pocket", target.location)
         self.engine.memory.add(target.name, world.tick_no, world.clock.day, world.clock.hhmm,
@@ -155,6 +156,7 @@ class Director:
             return "nothing worth stealing tonight"
         take = round(balance * self.rng.uniform(0.6, 0.9), 2)
         world.tills[target] = round(balance - take, 2)
+        world.outside_flow = round(world.outside_flow - take, 2)
         where = ("the town lockbox" if target == fund
                  else f"the vault at {target}")
         world.emit("world", None,
@@ -208,6 +210,7 @@ class Director:
         a.is_stranger = True
         a.location = "the plaza"
         a.money = self.rng.uniform(20, 60)
+        world.outside_flow = round(world.outside_flow + a.money, 2)
         # claim a vacant home if the town has built one
         for lname, loc in world.locations.items():
             if loc.get("vacant"):

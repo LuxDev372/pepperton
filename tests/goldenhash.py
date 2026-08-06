@@ -41,12 +41,14 @@ config.MOCK_MODE = True
 config.RADIO_ENABLED = False   # no network: the fingerprint must be hermetic
 
 from sim.engine import Engine  # noqa: E402  (config must be pinned first)
+from sim.world import World    # noqa: E402
 
 SEEDS = (7, 890811919)
 TICKS = 800
 
 fingerprint = hashlib.sha256()
 for seed in SEEDS:
+    World.close_all()   # Windows: an open transcript handle blocks the wipe
     shutil.rmtree("data", ignore_errors=True)
     os.makedirs("data")
     engine = Engine(seed=seed)
@@ -67,6 +69,7 @@ for seed in SEEDS:
     }
     fingerprint.update(json.dumps(end_state, sort_keys=True).encode())
 
+World.close_all()
 shutil.rmtree("data", ignore_errors=True)
 print(f"GOLDEN {fingerprint.hexdigest()}")
 print(f"       ({len(SEEDS)} towns x {TICKS} ticks, mock minds, radio off)")

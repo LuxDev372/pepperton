@@ -24,8 +24,12 @@ config.MOCK_MODE = True
 config.RADIO_ENABLED = False   # no network in tests
 
 from sim.engine import Engine
+from sim.world import World
 
 def fresh_data():
+    # release transcript handles first: this harness builds many Engines in
+    # one process, and on Windows an open handle blocks the rmtree below
+    World.close_all()
     shutil.rmtree("data", ignore_errors=True)
     os.makedirs("data")
 
@@ -634,8 +638,13 @@ def _holt_act():
                if d.get("assigned_day")] and
           debtor.money == round(dm0 + max(0, surplus), 2) and
           w.locations[house].get("owner") == buyer.name, note[:70])
+    # a landlord does not move in — but the deed still makes it PRIVATE.
+    # (Pre-v2.9.2 this asserted no home_of at all, which is exactly what let
+    # the town wander into and build on a man's second house.)
     check("a deed on a second house makes a landlord, not a move",
-          buyer.home != house and "home_of" not in w.locations[house],
+          buyer.home != house and
+          w.locations[house].get("home_of") == buyer.name and
+          house not in w.public_locations(),
           buyer.home)
 
     # redemption: pay in full BEFORE the sale and the door comes back
@@ -979,8 +988,154 @@ def _tibbs_door():
     fresh_data()
 
 _old_config_boot_v28()
+def _review_fixes_v292():
+    """The external review of v2.9.1. Every finding gets a regression."""
+    from sim import bus as busmod
+    fresh_data()
+    e = Engine(seed=85)
+    w = e.world
+
+    # 1. REFUSED IS NOT ABSENT. A public worker sent home for a broke town
+    #    fund was being counted an absentee AND stripped of his Crane Bonus.
+    old = dict(config.LOYALTY)
+    try:
+        config.LOYALTY = dict(old, enabled=True, streak_days=3,
+                              raise_pct=0.25, max_steps=2, milestone_bonus=5)
+        public = next(a for a in w.agents.values()
+                      if a.workplace() and w._wage_till_key(a) == config.TOWN_FUND)
+        w.work_streaks[public.name] = 6          # a real earned raise
+        w.absence_streaks[public.name] = 0
+        w.tills[config.TOWN_FUND] = 0.0
+        w.add_debt(config.TOWN_FUND, public.name,
+                   config.WAGE_DEBT_CAP + 10, "back wages at the town fund")
+        public.location = public.workplace()
+        w.clock.day = 5
+        w._bell_day_done = 5
+        w.worked_today = set()
+        w.turned_away_today = set()
+        ok, _ = w.execute(public, {"action": "work"})
+        check("a broke town still turns a public worker away", not ok, "")
+        check("but the town records that he SHOWED UP",
+              public.name in w.turned_away_today, "")
+        w._attendance_day_done = 4
+        w.attendance_ledger()
+        check("being refused does not break the run",
+              w.work_streaks[public.name] == 6 and
+              w.loyalty_steps(public.name) == 2,
+              f"streak {w.work_streaks[public.name]}")
+        check("being refused is not an absence",
+              w.absence_streaks.get(public.name, 0) == 0, "")
+        line = [ev for ev in w.events
+                if "ATTENDANCE LEDGER" in str(ev.get("text", ""))][-1]["text"]
+        check("the ledger names the payroll, not the man",
+              "TURNED AWAY" in line and
+              public.name.split()[0] not in line.split("DOORS NEVER OPENED")[-1],
+              line[:90])
+    finally:
+        config.LOYALTY = old
+    fresh_data()
+
+    # 2. RENT LANDS BEFORE THE SWEEP: a trickle of fresh rent must not open
+    #    the payroll gate while back-wage debt is still over the cap.
+    e = Engine(seed=86)
+    w = e.world
+    public = next(a for a in w.agents.values()
+                  if a.workplace() and w._wage_till_key(a) == config.TOWN_FUND)
+    w.tills[config.TOWN_FUND] = 0.0
+    w.add_debt(config.TOWN_FUND, public.name,
+               config.WAGE_DEBT_CAP * 3, "back wages at the town fund")
+    w.tills[config.TOWN_FUND] = 6.0          # one tenant's rent, mid-tick
+    w.settle_business_debts()                 # the sweep now runs AFTER rent
+    # note the residue: settling the fund's own back wages hands the income
+    # tax on that payment straight back to the fund, so it never reads 0.00
+    check("fresh rent is swallowed by the debt it owes, not spent on new hires",
+          w.tills[config.TOWN_FUND] < getattr(config, "WAGE_PER_SHIFT_TICK", 2)
+          and w.wage_debt_of(config.TOWN_FUND) >= config.WAGE_DEBT_CAP,
+          f"fund ${w.tills[config.TOWN_FUND]:.2f}, "
+          f"owed ${w.wage_debt_of(config.TOWN_FUND):.2f}")
+    public.location = public.workplace()
+    ok, _ = w.execute(public, {"action": "work"})
+    check("the payroll gate stays shut on an insolvent fund", not ok, "")
+    fresh_data()
+
+    # 3. A LANDLORD'S SECOND HOUSE IS PRIVATE PROPERTY, not public land
+    e = Engine(seed=87)
+    w = e.world
+    bank = w.bank_name()
+    owner = next(a for a in w.agents.values() if a.home)
+    victim = next(a for a in w.agents.values()
+                  if a.home and a.name != owner.name)
+    house = victim.home
+    w.add_debt(victim.name, bank, 30, "bought paper (test)", due_day=1)
+    for d in w.open_debts(debtor=victim.name, creditor=bank):
+        d["assigned_day"] = 1
+    w.clock.day = 9
+    w.ledger.foreclosure_sweep()
+    owner.money = 200.0
+    owner.location = bank
+    ok, note = w.execute(owner, {"action": "buy", "item": house})
+    check("a second deed is bought", ok and
+          w.locations[house].get("owner") == owner.name, note[:60])
+    check("and the town cannot wander or build on it",
+          house not in w.public_locations() and
+          w.locations[house].get("home_of") == owner.name, "")
+    fresh_data()
+
+    # 4. EVERY faucet is audited, not just the bus
+    e = Engine(seed=88)
+    w = e.world
+    def town_money():
+        return round(sum(a.money for a in w.agents.values())
+                     + sum(w.tills.values()), 2)
+    start, flow0 = town_money(), w.outside_flow
+    e.director.trigger("windfall")
+    check("the Director's windfall is audited",
+          abs((town_money() - start) - (w.outside_flow - flow0)) < 0.01,
+          f"money +{town_money() - start:.2f}, "
+          f"flow +{w.outside_flow - flow0:.2f}")
+    start, flow0 = town_money(), w.outside_flow
+    w.tills[config.TOWN_FUND] = 200.0
+    start, flow0 = town_money(), w.outside_flow
+    e.director.trigger("heist")
+    check("the heist is audited as a money SINK",
+          abs((town_money() - start) - (w.outside_flow - flow0)) < 0.01
+          and w.outside_flow < flow0,
+          f"money {town_money() - start:.2f}, flow {w.outside_flow - flow0:.2f}")
+    fresh_data()
+
+    # 5. RESOLVED PAPER IS PRUNED; open paper is never touched
+    e = Engine(seed=89)
+    w = e.world
+    keep = getattr(config, "LEDGER_HISTORY_KEEP", 200)
+    debtor = next(iter(w.agents))
+    for i in range(keep + 40):
+        d = w.add_debt(debtor, config.TOWN_FUND, 1, f"settled {i}")
+        d["status"] = "paid"
+    live = w.add_debt(debtor, config.TOWN_FUND, 5, "still owed")
+    w.ledger.prune_resolved()
+    done = [d for d in w.debts if d["status"] != "open"]
+    check("settled paper stops accumulating forever", len(done) == keep,
+          f"{len(done)} resolved rows kept")
+    check("open paper is never pruned", live in w.debts, "")
+    fresh_data()
+
+    # 6. the config knob the review caught reading raw
+    import inspect
+    from sim import world as worldmod
+    src = inspect.getsource(worldmod)
+    check("no raw config reads of optional knobs in permit_sweep",
+          "config.CONDEMN_GRACE_DAYS" not in src, "")
+
+    # 7. transcript handles can be released (Windows harness gap)
+    e = Engine(seed=90)
+    worldmod.World.close_all()
+    check("worlds release their transcript handles on demand",
+          e.world._jsonl.closed and e.world._log.closed, "")
+    fresh_data()
+
 _crane_bonus()
 _tibbs_door()
+_review_fixes_v292()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

@@ -163,6 +163,10 @@ class Engine:
             world.earned_today = state.get("earned_today", {})
             world.absence_streaks = state.get("absence_streaks", {})
             world.work_streaks = state.get("work_streaks", {})
+            world.turned_away_today = set(state.get("turned_away_today", []))
+            world.outside_flow = state.get("outside_flow", 0.0)
+            if hasattr(self.radio, "_used"):
+                self.radio._used = set(state.get("radio_used", []))
             world._bell_day_done = state.get("bell_day_done", 0)
             world._attendance_day_done = state.get("attendance_day_done", 0)
             # the Fall Fair Act reaches back: incomplete projects from
@@ -283,6 +287,9 @@ class Engine:
             "earned_today": self.world.earned_today,
             "absence_streaks": self.world.absence_streaks,
             "work_streaks": self.world.work_streaks,
+            "turned_away_today": sorted(self.world.turned_away_today),
+            "outside_flow": self.world.outside_flow,
+            "radio_used": sorted(getattr(self.radio, "_used", set())),
             "bell_day_done": self.world._bell_day_done,
             "attendance_day_done": self.world._attendance_day_done,
             "bus": {
@@ -519,9 +526,17 @@ class Engine:
         self.radio.maybe_broadcast(self.world)
         self.director.step()
         if getattr(config, "ECONOMY", False):
-            self.world.settle_business_debts()
+            # Rent lands BEFORE the settlement sweep, not after (v2.9.2). The
+            # other order let a broke town fund hold a few dollars of fresh
+            # rent for the rest of the 08:00 tick — long enough for the
+            # payroll gate to read "till > 0" and take on workers it was
+            # still thousands short of paying, adding new back-wage debt on
+            # top of debt already over the cap. It looked like recovery and
+            # was compounding insolvency. Money owed gets paid the instant
+            # money arrives.
             if self.world.clock.at("08:00"):
                 self.world.morning_ledger()
+            self.world.settle_business_debts()
         if self.world.clock.at("08:00"):
             self.world.permit_sweep()
         if getattr(config, "ATTENDANCE_ENABLED", True):

@@ -445,6 +445,12 @@ class Ledger:
         loc.pop("for_sale", None)
         loc.pop("seized_from", None)
         loc["owner"] = buyer.name
+        # A deed makes it PRIVATE, whether or not the owner sleeps there.
+        # Without this the second house had no home_of key at all, which made
+        # it indistinguishable from the plaza: villagers wandered in, and the
+        # notice board would happily let the town propose and build a public
+        # project on a man's private property. (Found by review, v2.9.2.)
+        loc["home_of"] = buyer.name
         evictee = world.agents.get(evictee_name) if evictee_name else None
         surplus = remaining
         if surplus > 0:
@@ -576,3 +582,21 @@ class Ledger:
         # the Holt Act: the bank buys the fund's paper, then collects on it
         self.debt_market()
         self.foreclosure_sweep()
+        self.prune_resolved()
+
+    def prune_resolved(self):
+        """Settled paper does not need to be carried forever. debts and
+        promises were append-only — resolved entries only flipped status and
+        then sat there, re-serialized into world_state.json every four ticks
+        and rescanned by every credit check for the rest of the town's life.
+        The rest of this codebase already caps its histories (events 600→400,
+        recent_says 24→16); these two were the exception. Open items are
+        NEVER touched. (Found by review, v2.9.2.)"""
+        keep = getattr(config, "LEDGER_HISTORY_KEEP", 200)
+        for attr in ("debts", "promises"):
+            rows = getattr(self, attr)
+            done = [r for r in rows if r.get("status") != "open"]
+            if len(done) <= keep:
+                continue
+            drop = {id(r) for r in done[:len(done) - keep]}
+            setattr(self, attr, [r for r in rows if id(r) not in drop])

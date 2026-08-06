@@ -76,6 +76,11 @@ class Clock:
         return prev < t <= self.minutes
 
 
+# every World built in this process, so a test harness can release the
+# transcript handles before wiping data/ (see World.close_all)
+_OPEN_WORLDS = []
+
+
 class World:
     def __init__(self, cast, world_id="legacy"):
         self.world_id = world_id
@@ -103,6 +108,14 @@ class World:
         self.earned_today = {}
         self.absence_streaks = {}
         self.work_streaks = {}      # the Crane Bonus: absence's mirror
+        self.turned_away_today = set()   # showed up; the town couldn't pay
+        # Net money created from outside the loop, ever. The bus is not the
+        # only faucet — the Director's windfall conjures cash into a pocket
+        # and a stranger steps off the coach with a wallet, while the heist
+        # burns money out of the world entirely. If the conservation check is
+        # to mean anything it has to net ALL of them, not just the bus.
+        # (Found by review, v2.9.2.)
+        self.outside_flow = 0.0
         self._bell_day_done = 0
         self._attendance_day_done = 0
         # economics live in sim/ledger.py; the World only hosts the physics
@@ -112,6 +125,33 @@ class World:
         os.makedirs("data", exist_ok=True)
         self._jsonl = open(config.TRANSCRIPT_JSONL, "a", encoding="utf-8")
         self._log = open(config.TRANSCRIPT_LOG, "a", encoding="utf-8")
+        _OPEN_WORLDS.append(self)
+
+    def close(self):
+        """Release the transcript handles. A server holds one World for its
+        whole life so this never mattered in production — but the test
+        harness builds many Worlds in one process against a shared data/
+        directory, and Engine<->World is a reference cycle, so CPython never
+        collects them promptly. On Windows the still-open handle blocks the
+        rmtree between test phases. (Found by review, v2.9.2.)"""
+        for handle in ("_jsonl", "_log"):
+            f = getattr(self, handle, None)
+            if f is not None and not f.closed:
+                try:
+                    f.close()
+                except OSError:
+                    pass
+        try:
+            _OPEN_WORLDS.remove(self)
+        except ValueError:
+            pass
+
+    @staticmethod
+    def close_all():
+        """Close every World this process has opened. Test harnesses call
+        this before wiping data/."""
+        for world in list(_OPEN_WORLDS):
+            world.close()
 
     # ------------------------------------------------------------ helpers
     def occupants(self, loc, exclude=None):
@@ -165,15 +205,22 @@ class World:
             return False, "reached for their wallet, forgot what for"
         # the Holt Act: seized houses are bought like anything else — by
         # name, at the bank's teller window or standing at the door
-        for house, loc in self.locations.items():
-            if loc.get("for_sale") and (wanted in house.lower()
-                                        or "house" in wanted
-                                        or "home" in wanted or "deed" in wanted):
-                bank = self.bank_name()
-                if agent.location not in (bank, house):
-                    return False, (f"the deed to {house} is signed at "
-                                   f"{bank} (or at the door itself)")
-                return self.ledger.sell_seized_house(agent, house)
+        # Prefer the house they NAMED; then the one they're standing at; only
+        # then a generic "buy the house", and only if exactly one is listed —
+        # otherwise two simultaneous foreclosures send a buyer to the wrong
+        # address with a confusing refusal. (Found by review, v2.9.2.)
+        for_sale = [h for h, l in self.locations.items() if l.get("for_sale")]
+        named = [h for h in for_sale if wanted and wanted in h.lower()]
+        here = [h for h in for_sale if h == agent.location]
+        generic = (for_sale if len(for_sale) == 1
+                   and any(w in wanted for w in ("house", "home", "deed"))
+                   else [])
+        for house in (named or here or generic):
+            bank = self.bank_name()
+            if agent.location not in (bank, house):
+                return False, (f"the deed to {house} is signed at "
+                               f"{bank} (or at the door itself)")
+            return self.ledger.sell_seized_house(agent, house)
         catalog = self.goods_catalog()
         item = next((k for k in catalog if wanted in k.lower()
                      or k.lower() in wanted), None)
@@ -285,6 +332,7 @@ class World:
             return
         self._bell_day_done = day
         self.worked_today = set()
+        self.turned_away_today = set()
         self.earned_today = {}
         openings = (self.open_positions()
                     if getattr(config, "HIRING_ENABLED", True) else {})
@@ -336,7 +384,7 @@ class World:
         if self._attendance_day_done >= day:
             return
         self._attendance_day_done = day
-        showed, absent = [], []
+        showed, absent, refused = [], [], []
         for worker in self.agents.values():
             workplace = worker.workplace()
             if not workplace:
@@ -348,6 +396,12 @@ class World:
                 showed.append(f"{worker.name.split()[0]} ({workplace}"
                               + (f", +${earned:.0f}" if earned else "")
                               + loyal + ")")
+            elif worker.name in self.turned_away_today:
+                # present and refused: the run holds, the record is clean,
+                # and the town is told whose payroll failed — not whose
+                # character did
+                refused.append(f"{workplace} — {worker.name.split()[0]} came "
+                               f"in, no shift to give")
             else:
                 self._loyalty_tick(worker, False)
                 self.absence_streaks[worker.name] = \
@@ -355,11 +409,14 @@ class World:
                 run = self.absence_streaks[worker.name]
                 absent.append(f"{workplace} — {worker.name.split()[0]} absent"
                               + (f", day {run} running" if run > 1 else ""))
-        if not showed and not absent:
+        if not showed and not absent and not refused:
             return
         lines = []
         if showed:
             lines.append("ON SHIFT today: " + "; ".join(showed) + ".")
+        if refused:
+            lines.append("TURNED AWAY (showed up, no work to give): "
+                         + "; ".join(refused) + ".")
         if absent:
             lines.append("DOORS NEVER OPENED: " + "; ".join(absent) + ".")
         if getattr(config, "HIRING_ENABLED", True):
@@ -430,7 +487,8 @@ class World:
                 self.emit("world", None,
                           f"PERMIT EXPIRED: {proj['name']} sits at "
                           f"{proj['done']}/{proj['work']}.{fine_bit} "
-                          f"Condemnation in {config.CONDEMN_GRACE_DAYS} days "
+                          f"Condemnation in "
+                          f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days "
                           f"unless it gets finished.", proj["site"])
                 for villager in self.agents.values():
                     if villager.name != proj.get("proposed_by"):
@@ -1226,7 +1284,13 @@ class World:
             return False, f"can't work here — their work is at {wp}"
         if getattr(config, "ECONOMY", False):
             till_key = self._wage_till_key(agent)
-            dry = (self.tills.get(till_key, 0.0) <= 0 and
+            # "Can't pay" means can't cover even one tick of wage — not
+            # "holds exactly zero". A fund settling its own back wages gets
+            # the income tax on that payment handed straight back to it, so
+            # it can never actually reach 0.00 and the old `<= 0` proxy read
+            # the residue as solvency. (Found by review, v2.9.2.)
+            wage_tick = getattr(config, "WAGE_PER_SHIFT_TICK", 2)
+            dry = (self.tills.get(till_key, 0.0) < wage_tick and
                    self.wage_debt_of(till_key) >= config.WAGE_DEBT_CAP)
             # THE TIBBS DOOR (v2.9.1). Vera Tibbs of Pompeii showed up for
             # her shift at the Rusty Tap three times in one day — the third
@@ -1246,6 +1310,15 @@ class World:
                 agent.activity = {"type": "idle",
                                   "until_tick": self.tick_no + 8,
                                   "note": "sent home — no shifts today"}
+                # THE TIBBS DOOR, second half (v2.9.2). Being refused is not
+                # the same as not turning up, and the ledger must not confuse
+                # them. A public worker sent home for a broke town fund used
+                # to be counted an ABSENTEE — publicly named under "DOORS
+                # NEVER OPENED" and stripped of the wage raise he'd earned by
+                # showing up every day. Punished for arriving. He is recorded
+                # here as present-and-refused: no absence streak, no loyalty
+                # reset, and the town hears why the door stayed shut.
+                self.turned_away_today.add(agent.name)
                 self.emit("action", agent.name,
                           f"showed up for a shift and was sent home — "
                           f"{where} can't make payroll", agent.location)

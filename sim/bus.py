@@ -129,6 +129,7 @@ class BusRoute:
             self.spent_today[shop] = round(
                 self.spent_today.get(shop, 0.0) + amount, 2)
             self.brought_in = round(self.brought_in + amount, 2)
+            world.outside_flow = round(world.outside_flow + amount, 2)
         # the town SEES the register ring — that is the whole lesson
         for shop, took in sorted(self.spent_today.items()):
             if took >= 10 and not self.spent_today.get(f"~announced~{shop}"):
