@@ -828,11 +828,98 @@ def _old_config_boot_v28():
             config.BUS = had_bus
     fresh_data()
 
+def _crane_bonus():
+    """v2.9: the carrot. Ships DARK — the first check is that it changes
+    nothing at all until somebody arms it."""
+    fresh_data()
+    e = Engine(seed=83)
+    w = e.world
+    worker = next(a for a in w.agents.values()
+                  if a.workplace() and a.workplace() in w.tills)
+    shop = worker.workplace()
+
+    # DARK by default: no multiplier, no streak accounting, no event
+    check("the Crane Bonus ships dark",
+          config.LOYALTY["enabled"] is False and
+          w.wage_multiplier(worker.name) == 1.0 and
+          w.loyalty_steps(worker.name) == 0, "")
+    w.work_streaks[worker.name] = 99
+    check("a dark Act pays no raise even on a long run",
+          w.wage_multiplier(worker.name) == 1.0, "")
+    w.work_streaks = {}
+
+    # arm it
+    old = dict(config.LOYALTY)
+    try:
+        config.LOYALTY = dict(old, enabled=True, streak_days=3,
+                              raise_pct=0.25, max_steps=2,
+                              milestone_bonus=12)
+        cfgL = w.loyalty_cfg()
+
+        # a run of shifts earns a step, a public event, and cash in hand
+        w.tills[config.TOWN_FUND] = 200.0
+        w.tills[shop] = 300.0
+        fund0 = w.tills[config.TOWN_FUND]
+        money0 = worker.money
+        for day in range(1, cfgL["streak_days"] + 1):
+            w.clock.day = day
+            w._attendance_day_done = day - 1
+            w.worked_today = {worker.name}
+            w.attendance_ledger()
+        check("a run of shifts earns a step",
+              w.work_streaks[worker.name] == cfgL["streak_days"] and
+              w.loyalty_steps(worker.name) == 1,
+              f"streak {w.work_streaks[worker.name]}")
+        check("the milestone is paid from the town fund, in hand",
+              abs(worker.money
+                  - (money0 + cfgL["milestone_bonus"])) < 0.01 and
+              w.tills[config.TOWN_FUND] == round(
+                  fund0 - cfgL["milestone_bonus"], 2),
+              f"${worker.money} / fund ${w.tills[config.TOWN_FUND]}")
+        bonus_ev = [ev for ev in w.events
+                    if "THE CRANE BONUS" in str(ev.get("text", ""))]
+        check("the town is told who showed up", len(bonus_ev) == 1,
+              bonus_ev[0]["text"][:70] if bonus_ev else "no event")
+        check("the raise is real money",
+              abs(w.wage_multiplier(worker.name)
+                  - (1 + cfgL["raise_pct"])) < 1e-9,
+              str(w.wage_multiplier(worker.name)))
+        worker.money = 0.0
+        w.pay_wage(worker, 10)
+        check("the raise reaches the wage packet", worker.money > 10 * 0.85,
+              f"${worker.money:.2f} on a $10 base shift")
+
+        # the ledger reads the run out loud beside the absentees
+        line = [ev for ev in w.events
+                if "ATTENDANCE LEDGER" in str(ev.get("text", ""))][-1]["text"]
+        check("the run is read out at the evening ledger",
+              "days running" in line and "%" in line, line[:80])
+
+        # ceiling holds
+        w.work_streaks[worker.name] = cfgL["streak_days"] * 20
+        check("the raise has a ceiling",
+              w.loyalty_steps(worker.name) == cfgL["max_steps"], "")
+
+        # one missed day and it all resets
+        w.clock.day += 1
+        w._attendance_day_done = w.clock.day - 1
+        w.worked_today = set()
+        w.attendance_ledger()
+        check("missing a day resets the raise to base",
+              w.work_streaks[worker.name] == 0 and
+              w.wage_multiplier(worker.name) == 1.0, "")
+        check("the worker is told the run is broken",
+              any("broke your run" in p["text"] for p in worker.pending), "")
+    finally:
+        config.LOYALTY = old
+    fresh_data()
+
 _holt_act()
 _situations_vacant()
 _old_config_boot_v27()
 _bus_route()
 _old_config_boot_v28()
+_crane_bonus()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

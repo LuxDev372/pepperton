@@ -166,6 +166,10 @@ class Ledger:
         if not getattr(config, "ECONOMY", False):
             agent.money += wage
             return
+        # the Crane Bonus: a long run raises the wage itself (multiplier is
+        # 1.0 while the Act is dark, so this is a no-op until it's armed)
+        if hasattr(self.world, "wage_multiplier"):
+            wage = round(float(wage) * self.world.wage_multiplier(agent.name), 2)
         till_key = self.wage_till_key(agent)
         avail = self.tills.get(till_key, 0.0)
         paid = min(float(wage), max(0.0, avail))

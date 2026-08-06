@@ -297,6 +297,26 @@ FORECLOSURE = {
     "min_debt": 12,       # the bank doesn't take houses over pocket change
 }
 
+# The Crane Bonus (v2.9): the first law in this town's history named for a
+# HERO instead of a criminal. Walt Crane worked twenty-five consecutive days
+# at Rosie's Diner while every other door in Pepperton stayed shut, made the
+# first poor-box donation the town ever saw, and never once mentioned either.
+# Every statute before this one was a stick. This is the carrot: consecutive
+# days worked earn a permanent step up in wage, a milestone bonus paid from
+# the town fund (the fund's first positive expenditure), and your streak read
+# aloud beside the absentees at the evening ledger. Miss a day and the raise
+# resets — the stakes run both directions, same as the shame does.
+#
+# SHIPPED DARK (enabled False) on purpose: the ten-day bus experiment is
+# running in Pepperton and nothing may change under it. Arm it at Day 90.
+LOYALTY = {
+    "enabled": False,
+    "streak_days": 5,        # consecutive days worked per step
+    "raise_pct": 0.20,       # each step adds this much to the wage
+    "max_steps": 3,          # ceiling: +60%
+    "milestone_bonus": 15,   # paid from the town fund when a step is earned
+}
+
 # The Bus Route (v2.8): the town's first customers from outside itself.
 # Pepperton's money was a closed loop — seven broke people trying to be
 # each other's economy — so the coach route reopens. Sightseers arrive on

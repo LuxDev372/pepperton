@@ -102,6 +102,7 @@ class World:
         self.worked_today = set()
         self.earned_today = {}
         self.absence_streaks = {}
+        self.work_streaks = {}      # the Crane Bonus: absence's mirror
         self._bell_day_done = 0
         self._attendance_day_done = 0
         # economics live in sim/ledger.py; the World only hosts the physics
@@ -207,6 +208,73 @@ class World:
         return True, f"bought {item} (-${cost}); it's theirs now"
 
     # --------------------------------------------- the working day (v2.6)
+    # ------------------------------------------- the Crane Bonus (v2.9)
+    @staticmethod
+    def loyalty_cfg():
+        cfg = {"enabled": False, "streak_days": 5, "raise_pct": 0.20,
+               "max_steps": 3, "milestone_bonus": 15}
+        cfg.update(getattr(config, "LOYALTY", {}))
+        return cfg
+
+    def loyalty_steps(self, name):
+        """How many raises this villager's record has earned. Zero when the
+        Act is dark, which is how it ships."""
+        cfg = self.loyalty_cfg()
+        if not cfg["enabled"] or cfg["streak_days"] <= 0:
+            return 0
+        streak = self.work_streaks.get(name, 0)
+        return min(cfg["max_steps"], streak // cfg["streak_days"])
+
+    def wage_multiplier(self, name):
+        cfg = self.loyalty_cfg()
+        return 1.0 + cfg["raise_pct"] * self.loyalty_steps(name)
+
+    def _loyalty_tick(self, worker, showed):
+        """Called once per villager at the evening ledger. Returns a short
+        public phrase for the ledger line, or ''."""
+        cfg = self.loyalty_cfg()
+        if not cfg["enabled"]:
+            return ""
+        name = worker.name
+        if not showed:
+            had = self.loyalty_steps(name)
+            self.work_streaks[name] = 0
+            if had:
+                worker.pending.append({
+                    "text": ("You broke your run. The raise you earned by "
+                             "showing up every day is gone — it goes back to "
+                             "the base wage, and it starts over tomorrow."),
+                    "interrupt": True, "sim_time": self.clock.hhmm,
+                })
+            return ""
+        before = self.loyalty_steps(name)
+        self.work_streaks[name] = self.work_streaks.get(name, 0) + 1
+        streak = self.work_streaks[name]
+        after = self.loyalty_steps(name)
+        if after > before:
+            bonus = min(float(cfg["milestone_bonus"]),
+                        self.tills.get(config.TOWN_FUND, 0.0))
+            if bonus > 0:
+                self.tills[config.TOWN_FUND] = round(
+                    self.tills[config.TOWN_FUND] - bonus, 2)
+                worker.money += bonus
+            pct = int(cfg["raise_pct"] * after * 100)
+            self.emit("world", None,
+                      f"THE CRANE BONUS — {name} has worked {streak} days "
+                      f"running. The town fund pays ${bonus:.0f} in hand and "
+                      f"the wage goes up {pct}%, for as long as the run "
+                      f"holds. This town pays for showing up.", "the plaza")
+            worker.pending.append({
+                "text": (f"{streak} days running. The town noticed: ${bonus:.0f} "
+                         f"paid out of the fund, and your wage is up {pct}% "
+                         f"until the day you don't show."),
+                "interrupt": True, "sim_time": self.clock.hhmm,
+            })
+        if after:
+            return (f", {streak} days running, +"
+                    f"{int(cfg['raise_pct'] * after * 100)}%")
+        return f", {streak} days running" if streak > 1 else ""
+
     def morning_bell(self):
         """08:00: every employed villager is reminded the shift starts —
         and that the town notices who shows. Resets the day's attendance."""
@@ -240,6 +308,16 @@ class World:
             streak_bit = (f" You haven't opened those doors in {streak} "
                           f"days, and the ledger says so in public."
                           if streak >= 2 else "")
+            steps = self.loyalty_steps(worker.name)
+            run = self.work_streaks.get(worker.name, 0)
+            if steps:
+                pct = int(self.loyalty_cfg()["raise_pct"] * steps * 100)
+                streak_bit += (f" You have worked {run} days running and the "
+                               f"town pays you {pct}% over base for it — "
+                               f"until the day you don't show.")
+            elif run >= 2:
+                streak_bit += (f" {run} days running so far; the town pays "
+                               f"more for a long run.")
             worker.pending.append({
                 "text": (f"The morning bell: your shift at {workplace} "
                          f"starts now. The town posts the attendance ledger "
@@ -266,9 +344,12 @@ class World:
             if worker.name in self.worked_today:
                 self.absence_streaks[worker.name] = 0
                 earned = self.earned_today.get(worker.name, 0.0)
+                loyal = self._loyalty_tick(worker, True)
                 showed.append(f"{worker.name.split()[0]} ({workplace}"
-                              + (f", +${earned:.0f}" if earned else "") + ")")
+                              + (f", +${earned:.0f}" if earned else "")
+                              + loyal + ")")
             else:
+                self._loyalty_tick(worker, False)
                 self.absence_streaks[worker.name] = \
                     self.absence_streaks.get(worker.name, 0) + 1
                 run = self.absence_streaks[worker.name]

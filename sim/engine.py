@@ -162,6 +162,7 @@ class Engine:
             world.worked_today = set(state.get("worked_today", []))
             world.earned_today = state.get("earned_today", {})
             world.absence_streaks = state.get("absence_streaks", {})
+            world.work_streaks = state.get("work_streaks", {})
             world._bell_day_done = state.get("bell_day_done", 0)
             world._attendance_day_done = state.get("attendance_day_done", 0)
             # the Fall Fair Act reaches back: incomplete projects from
@@ -281,6 +282,7 @@ class Engine:
             "worked_today": sorted(self.world.worked_today),
             "earned_today": self.world.earned_today,
             "absence_streaks": self.world.absence_streaks,
+            "work_streaks": self.world.work_streaks,
             "bell_day_done": self.world._bell_day_done,
             "attendance_day_done": self.world._attendance_day_done,
             "bus": {
