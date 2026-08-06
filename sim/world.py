@@ -116,6 +116,7 @@ class World:
         # to mean anything it has to net ALL of them, not just the bus.
         # (Found by review, v2.9.2.)
         self.outside_flow = 0.0
+        self.last_foreclosure_day = 0    # for the vitals readout
         self._bell_day_done = 0
         self._attendance_day_done = 0
         # economics live in sim/ledger.py; the World only hosts the physics

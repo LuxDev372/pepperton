@@ -165,6 +165,7 @@ class Engine:
             world.work_streaks = state.get("work_streaks", {})
             world.turned_away_today = set(state.get("turned_away_today", []))
             world.outside_flow = state.get("outside_flow", 0.0)
+            world.last_foreclosure_day = state.get("last_foreclosure_day", 0)
             if hasattr(self.radio, "_used"):
                 self.radio._used = set(state.get("radio_used", []))
             world._bell_day_done = state.get("bell_day_done", 0)
@@ -289,6 +290,7 @@ class Engine:
             "work_streaks": self.world.work_streaks,
             "turned_away_today": sorted(self.world.turned_away_today),
             "outside_flow": self.world.outside_flow,
+            "last_foreclosure_day": self.world.last_foreclosure_day,
             "radio_used": sorted(getattr(self.radio, "_used", set())),
             "bell_day_done": self.world._bell_day_done,
             "attendance_day_done": self.world._attendance_day_done,
@@ -734,6 +736,65 @@ class Engine:
                 "debts": [d for d in world.debts if d["status"] == "open"][-20:],
                 "promises": [p for p in world.promises if p["status"] == "open"][-10:],
             } if getattr(config, "ECONOMY", False) else None),
+            "vitals": self.vitals(),
+        }
+
+    def vitals(self):
+        """Aggregate town health, at a glance.
+
+        Built because a real defect hid in plain sight: the town fund's
+        back-wage debt grew to five times its cap while the town LOOKED
+        recovered — public workers were getting shifts again — and the only
+        way to see it was to instrument the code by hand. A town can be
+        quietly dying in a way no single villager's line of dialogue will
+        ever tell you. These numbers will.
+
+        Pure observation: reads state, changes nothing. Safe to add while an
+        experiment is running.
+        """
+        world = self.world
+        if not getattr(config, "ECONOMY", False):
+            return None
+        agents = list(world.agents.values())
+        purses = sorted(a.money for a in agents)
+        mid = len(purses) // 2
+        median = (purses[mid] if len(purses) % 2
+                  else (purses[mid - 1] + purses[mid]) / 2) if purses else 0.0
+        employed = [a for a in agents if a.workplace()]
+        open_debt = [d for d in world.debts if d["status"] == "open"]
+        villager_debt = sum(d["amount"] for d in open_debt
+                            if d["debtor"] in world.agents)
+        business_debt = sum(d["amount"] for d in open_debt
+                            if d["debtor"] not in world.agents)
+        for_sale = [k for k, v in world.locations.items() if v.get("for_sale")]
+        homeless = [a for a in agents if not a.home]
+        last_fc = getattr(world, "last_foreclosure_day", 0)
+        return {
+            "wealth_median": round(median, 2),
+            "wealth_total": round(sum(purses), 2),
+            "purse_poorest": round(purses[0], 2) if purses else 0.0,
+            "purse_richest": round(purses[-1], 2) if purses else 0.0,
+            "employed": len(employed),
+            "worked_today": len([a for a in employed
+                                 if a.name in world.worked_today]),
+            "turned_away_today": len(getattr(world, "turned_away_today", ())),
+            "longest_absence": max(
+                [world.absence_streaks.get(a.name, 0) for a in employed],
+                default=0),
+            "longest_run": max(
+                [world.work_streaks.get(a.name, 0) for a in employed],
+                default=0),
+            "debt_villagers": round(villager_debt, 2),
+            "debt_businesses": round(business_debt, 2),
+            "houses_for_sale": len(for_sale),
+            "homeless": len(homeless),
+            "days_since_foreclosure": (world.clock.day - last_fc
+                                       if last_fc else None),
+            "outside_flow": round(getattr(world, "outside_flow", 0.0), 2),
+            "bus_brought_in": round(getattr(self.bus, "brought_in", 0.0), 2),
+            "town_fund": round(world.tills.get(config.TOWN_FUND, 0.0), 2),
+            "poor_box": round(world.tills.get(
+                getattr(config, "POOR_BOX", "the poor box"), 0.0), 2),
         }
 
     def inspect(self, name):

@@ -53,6 +53,18 @@
   }
   #clock.paused { color: var(--ink-dim); }
   #daynight { font-size: 20px; line-height: 1; filter: saturate(0.8); }
+  .vitals {
+    display: flex; flex-wrap: wrap; gap: 0;
+    border-bottom: 1px solid var(--line, #2a2a2a);
+    background: rgba(255,255,255,0.02);
+    font-size: 11px; letter-spacing: .02em;
+  }
+  .vitals .v { padding: 6px 12px; border-right: 1px solid rgba(255,255,255,0.05); }
+  .vitals .v b { display: block; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+  .vitals .v span { opacity: .55; text-transform: uppercase; font-size: 9px; }
+  .vitals .v.warn b { color: #e0813f; }
+  .vitals .v.bad  b { color: #d4574e; }
+  .vitals .v.good b { color: #4fae8b; }
   .badge {
     font-size: 11px;
     padding: 3px 9px;
@@ -293,6 +305,7 @@
   <button id="dirBtn" class="ctlbtn">🎬 Director</button>
   <button id="pauseBtn">Pause</button>
 </header>
+<div id="vitals" class="vitals" title="Town vitals — the numbers no single villager will ever tell you"></div>
 
 <div id="director">
   <div class="sect">Roll an event</div>
@@ -639,6 +652,48 @@ function connect() {
   ws.onclose = () => { setConn(false); scheduleReconnect(); };
   ws.onerror = () => { try { ws.close(); } catch (e) {} };
 }
+function renderVitals(v) {
+  const box = $("vitals");
+  if (!box) return;
+  if (!v) { box.style.display = "none"; return; }
+  box.style.display = "flex";
+  const cell = (label, value, cls) =>
+    '<div class="v ' + (cls || "") + '"><b>' + value + '</b><span>' + label + '</span></div>';
+  const employed = v.employed || 0;
+  const worked = v.worked_today || 0;
+  // employment is the headline: a town where one person works looks fine
+  // in every other number right up until it doesn't
+  const workCls = !employed ? "" : (worked === 0 ? "bad"
+                  : worked <= employed / 2 ? "warn" : "good");
+  const debtCls = v.debt_businesses > 40 ? "bad" : v.debt_businesses > 0 ? "warn" : "";
+  const fcTxt = v.days_since_foreclosure == null ? "never"
+              : v.days_since_foreclosure + "d";
+  const fcCls = (v.days_since_foreclosure != null && v.days_since_foreclosure <= 2)
+              ? "bad" : "";
+  const flowCls = v.outside_flow < 0 ? "bad" : v.outside_flow > 0 ? "good" : "";
+  box.innerHTML = [
+    cell("on shift", worked + "/" + employed, workCls),
+    cell("turned away", v.turned_away_today || 0, v.turned_away_today ? "warn" : ""),
+    cell("longest absence", (v.longest_absence || 0) + "d",
+         v.longest_absence >= 5 ? "bad" : v.longest_absence >= 2 ? "warn" : ""),
+    cell("longest run", (v.longest_run || 0) + "d", v.longest_run >= 5 ? "good" : ""),
+    cell("median purse", "$" + v.wealth_median),
+    cell("poorest", "$" + v.purse_poorest, v.purse_poorest < 5 ? "warn" : ""),
+    cell("richest", "$" + v.purse_richest),
+    cell("town fund", "$" + Math.round(v.town_fund)),
+    cell("poor box", "$" + Math.round(v.poor_box)),
+    cell("owed by villagers", "$" + Math.round(v.debt_villagers),
+         v.debt_villagers > 60 ? "warn" : ""),
+    cell("unpaid wages", "$" + Math.round(v.debt_businesses), debtCls),
+    cell("homeless", v.homeless || 0, v.homeless ? "bad" : ""),
+    cell("houses for sale", v.houses_for_sale || 0, v.houses_for_sale ? "warn" : ""),
+    cell("since foreclosure", fcTxt, fcCls),
+    cell("outside money", (v.outside_flow < 0 ? "-$" : "$")
+         + Math.abs(Math.round(v.outside_flow)), flowCls),
+    cell("bus takings", "$" + Math.round(v.bus_brought_in)),
+  ].join("");
+}
+
 function scheduleReconnect() {
   setTimeout(connect, backoff);
   backoff = Math.min(backoff * 2, 8000);
@@ -700,6 +755,7 @@ function updateHeader(snap) {
     if (bits.length) seedTxt += " · " + bits.join(" · ");
   }
   $("seedbadge").textContent = seedTxt;
+  renderVitals(snap.vitals);
   const pb = $("pauseBtn");
   pb.textContent = snap.paused ? "Resume" : "Pause";
   pb.className = snap.paused ? "paused" : "";

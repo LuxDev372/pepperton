@@ -350,6 +350,7 @@ class Ledger:
                            f"FOR SALE at ${cfg['house_price']} (deed at "
                            f"the teller window)")
             villager.home = None
+            world.last_foreclosure_day = day
             world.emit("world", None,
                        f"FORECLOSURE at {house}: {bank} has levied the "
                        f"home of {villager.name} over ${total:.0f} in "

@@ -1133,9 +1133,53 @@ def _review_fixes_v292():
           e.world._jsonl.closed and e.world._log.closed, "")
     fresh_data()
 
+def _vitals():
+    """v2.9.3: the readout that would have caught the insolvency bug on
+    sight. Pure observation — it must not touch a single law."""
+    fresh_data()
+    e = Engine(seed=91)
+    w = e.world
+    v = e.vitals()
+    check("the town publishes vitals",
+          isinstance(v, dict) and "wealth_median" in v and
+          "debt_businesses" in v and "days_since_foreclosure" in v,
+          ", ".join(sorted(v)[:5]) if v else "none")
+    check("vitals appear in the snapshot the observatory reads",
+          "vitals" in e._snapshot_locked(), "")
+
+    # the exact blindness that hid the bug: a fund quietly over its cap
+    public = next(a for a in w.agents.values()
+                  if a.workplace() and w._wage_till_key(a) == config.TOWN_FUND)
+    w.add_debt(config.TOWN_FUND, public.name, config.WAGE_DEBT_CAP * 5,
+               "back wages at the town fund")
+    v = e.vitals()
+    check("unpaid wages are visible without reading code",
+          v["debt_businesses"] >= config.WAGE_DEBT_CAP * 5,
+          f"${v['debt_businesses']}")
+
+    # foreclosure recency
+    check("a town with no foreclosure reports none",
+          v["days_since_foreclosure"] is None, str(v["days_since_foreclosure"]))
+    w.last_foreclosure_day = w.clock.day - 3
+    check("and reports the gap once one happens",
+          e.vitals()["days_since_foreclosure"] == 3, "")
+
+    # employment is the headline number
+    worker = next(a for a in w.agents.values()
+                  if a.workplace() and a.workplace() in w.tills)
+    w.tills[worker.workplace()] = 100.0
+    worker.location = worker.workplace()
+    w.execute(worker, {"action": "work"})
+    v = e.vitals()
+    check("employment is counted honestly",
+          v["worked_today"] == 1 and v["employed"] >= 1,
+          f"{v['worked_today']}/{v['employed']}")
+    fresh_data()
+
 _crane_bonus()
 _tibbs_door()
 _review_fixes_v292()
+_vitals()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
