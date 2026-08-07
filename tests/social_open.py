@@ -72,5 +72,16 @@ countered = engine.dispatch(Command(
              "proposal": {"work": "tomorrow"}}))
 check("counter hands the turn back", third.accepted and countered.accepted and
       third_scene.status == "open" and third_scene.next_responder == left.name)
+fourth = engine.dispatch(Command(
+    kind="action", source="test", actor=left.name,
+    payload={"action": "interact", "to": right.name, "topic": "library"}))
+fourth_scene = list(engine.world.interactions.values())[-1]
+committed = engine.dispatch(Command(
+    kind="action", source="test", actor=right.name,
+    payload={"action": "interact", "act": "accept", "scene_id": fourth_scene.id,
+             "commitment": {"condition": "bring plans", "deadline_day": 3}}))
+check("acceptance creates a durable commitment", committed.accepted and
+      fourth_scene.commitment_id in engine.world.commitments and
+      engine.world.commitments[fourth_scene.commitment_id].condition == "bring plans")
 engine.stop()
 print("Social-open proof complete")

@@ -11,7 +11,7 @@ import threading
 import config
 from sim.causality import Command, CommandResult, DomainEvent
 from sim.ledger import Ledger
-from sim.social import Interaction, MAX_INTERACTION_ROUNDS, SPEECH_ACTS
+from sim.social import Commitment, Interaction, MAX_INTERACTION_ROUNDS, SPEECH_ACTS
 from sim.store import TownStore, scrub_surrogates
 
 
@@ -1070,16 +1070,35 @@ class World:
             if initiator is None or initiator.asleep or agent.asleep or \
                     initiator.location != scene.location or agent.location != scene.location:
                 return False, "both participants must remain awake at the scene location"
+            commitment = None
+            if speech_act == "accept":
+                commitment = action.get("commitment") or scene.proposal.get("commitment")
+                if commitment is not None and (not isinstance(commitment, dict) or
+                                               not str(commitment.get("condition") or "").strip()):
+                    return False, "an accepted commitment needs a condition"
             scene.status = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
             scene.response_act = speech_act
             scene.next_responder = None
             scene.updated_tick = self.tick_no
+            if speech_act == "accept":
+                if commitment is not None:
+                    self._social_seq += 1
+                    commitment_id = f"{self.world_id}:commitment:{self._social_seq}"
+                    self.commitments[commitment_id] = Commitment(
+                        id=commitment_id, owner=agent.name, counterparty=scene.initiator,
+                        condition=str(commitment["condition"]).strip(),
+                        deadline_day=commitment.get("deadline_day"),
+                        proof=dict(commitment.get("proof") or {}),
+                        source_interaction_id=scene.id)
+                    scene.commitment_id = commitment_id
             past = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
             event = self.emit("interaction", agent.name,
                 f"{past} {scene.initiator}'s {scene.topic} interaction",
                 scene.location, target=scene.initiator, topic=scene.topic,
                 thread_id=scene.thread_id)
             scene.last_event_id = event["event_id"]
+            if scene.commitment_id:
+                self.commitments[scene.commitment_id].source_event_id = event["event_id"]
             return True, f"{scene.status} the {scene.topic} interaction"
         if speech_act == "counter":
             scene = self.interactions.get(str(action.get("scene_id") or ""))
