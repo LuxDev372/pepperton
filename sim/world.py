@@ -9,7 +9,9 @@ import re
 import threading
 
 import config
+from sim.causality import Command, CommandResult, DomainEvent
 from sim.ledger import Ledger
+from sim.social import Commitment, Interaction, MAX_INTERACTION_ROUNDS, SPEECH_ACTS
 from sim.store import TownStore, scrub_surrogates
 
 
@@ -129,6 +131,11 @@ class World:
         self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
         self._event_seq = 0
+        self._command_seq = 0
+        self._social_seq = 0
+        self.interactions = {}
+        self.commitments = {}
+        self._active_command = None
         self._closed = False
         _OPEN_WORLDS.append(self)
 
@@ -661,7 +668,9 @@ class World:
         return self.ledger.is_money_promise(norm)
 
     # ------------------------------------------------------------- events
-    def emit(self, etype, agent, text, loc, target=None, deliver=True):
+    def emit(self, etype, agent, text, loc, target=None, deliver=True,
+             source=None, cause_event_id=None, command_id=None,
+             salience=None, thread_id=None, topic=None):
         """Record an event; queue it as a perception for co-located agents."""
         # Scrub half-characters at the door (v3.3.3). A villager typed a flag
         # emoji, one half of the surrogate pair survived into the transcript,
@@ -671,18 +680,35 @@ class World:
         text = scrub_surrogates(text)
         with self._events_lock:
             self._event_seq += 1
-            ev = {
-                "wid": self.world_id,
-                "seq": self._event_seq,
-                "tick": self.tick_no,
-                "day": self.clock.day,
-                "sim_time": self.clock.hhmm,
-                "type": etype,
-                "agent": agent,
-                "location": loc,
-                "target": target,
-                "text": text,
-            }
+            active = self._active_command
+            source = source or (active.source if active else
+                                ("villager" if agent else "world"))
+            cause_event_id = cause_event_id or (
+                active.cause_event_id if active else None)
+            command_id = command_id or (active.command_id if active else None)
+            salience = salience or (active.salience if active else "normal")
+            thread_id = thread_id or (active.thread_id if active else None)
+            if topic is None and active:
+                topic = active.topic or active.payload.get("action")
+            ev = DomainEvent(
+                wid=self.world_id,
+                seq=self._event_seq,
+                event_id=f"{self.world_id}:event:{self._event_seq}",
+                tick=self.tick_no,
+                day=self.clock.day,
+                sim_time=self.clock.hhmm,
+                type=etype,
+                agent=agent,
+                location=loc,
+                target=target,
+                text=text,
+                source=source,
+                cause_event_id=cause_event_id,
+                command_id=command_id,
+                salience=salience,
+                thread_id=thread_id,
+                topic=topic,
+            ).as_dict()
             who = f"{agent} -> {target}" if target else (agent or "WORLD")
             log_written = self.store.append_event_with_log(
                 ev, f"[{self.clock.label}] [{loc}] {etype.upper():8s} "
@@ -967,6 +993,129 @@ class World:
         })
         self._detect_promise(agent, target, norm, text)
         return True, f"texted {target}: {text}"
+
+    def _verb_interact(self, agent, action):
+        """Open a bounded, co-located social scene through world physics."""
+        speech_act = str(action.get("act") or action.get("speech_act") or
+                         "request").strip().lower()
+        if speech_act in {"accept", "refuse", "defer"}:
+            scene = self.interactions.get(str(action.get("scene_id") or ""))
+            if scene is None or scene.status != "open":
+                return False, "there is no open interaction with that id"
+            if agent.name != scene.next_responder or agent.name != scene.target:
+                return False, "it is not this person's turn in the interaction"
+            initiator = self.agents.get(scene.initiator)
+            if initiator is None or initiator.asleep or agent.asleep or \
+                    initiator.location != scene.location or agent.location != scene.location:
+                return False, "both participants must remain awake at the scene location"
+            commitment = None
+            if speech_act == "accept":
+                commitment = action.get("commitment") or scene.proposal.get("commitment")
+                if commitment is not None and (not isinstance(commitment, dict) or
+                                               not str(commitment.get("condition") or "").strip()):
+                    return False, "an accepted commitment needs a condition"
+            scene.status = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
+            scene.response_act = speech_act
+            scene.next_responder = None
+            scene.updated_tick = self.tick_no
+            if speech_act == "accept":
+                if commitment is not None:
+                    self._social_seq += 1
+                    commitment_id = f"{self.world_id}:commitment:{self._social_seq}"
+                    self.commitments[commitment_id] = Commitment(
+                        id=commitment_id, owner=agent.name, counterparty=scene.initiator,
+                        condition=str(commitment["condition"]).strip(),
+                        deadline_day=commitment.get("deadline_day"),
+                        proof=dict(commitment.get("proof") or {}),
+                        source_interaction_id=scene.id)
+                    scene.commitment_id = commitment_id
+            past = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
+            event = self.emit("interaction", agent.name,
+                f"{past} {scene.initiator}'s {scene.topic} interaction",
+                scene.location, target=scene.initiator, topic=scene.topic,
+                thread_id=scene.thread_id)
+            scene.last_event_id = event["event_id"]
+            if scene.commitment_id:
+                self.commitments[scene.commitment_id].source_event_id = event["event_id"]
+            return True, f"{scene.status} the {scene.topic} interaction"
+        if speech_act == "counter":
+            scene = self.interactions.get(str(action.get("scene_id") or ""))
+            if scene is None or scene.status != "open":
+                return False, "there is no open interaction with that id"
+            if agent.name != scene.next_responder:
+                return False, "it is not this person's turn in the interaction"
+            proposal = action.get("proposal")
+            if not isinstance(proposal, dict) or not proposal:
+                return False, "a counter needs a non-empty proposal"
+            scene.proposal = dict(proposal)
+            scene.round += 1
+            scene.response_act = "counter"
+            scene.updated_tick = self.tick_no
+            scene.next_responder = scene.initiator if agent.name == scene.target else scene.target
+            if scene.round >= MAX_INTERACTION_ROUNDS:
+                scene.status, scene.next_responder = "closed", None
+            event = self.emit("interaction", agent.name,
+                f"countered {scene.initiator}'s {scene.topic} interaction",
+                scene.location, target=scene.initiator, topic=scene.topic,
+                thread_id=scene.thread_id)
+            scene.last_event_id = event["event_id"]
+            return True, ("closed the interaction after too many counters"
+                          if scene.status == "closed" else "countered the interaction")
+        if speech_act not in SPEECH_ACTS - {"accept", "refuse", "counter", "defer", "leave"}:
+            return False, f"unsupported opening speech act {speech_act!r}"
+        target_name = self._resolve_agent(action.get("to") or action.get("target"))
+        target = self.agents.get(target_name)
+        if target is None or target.name == agent.name:
+            return False, "an interaction needs another named villager"
+        if target.asleep or target.location != agent.location:
+            return False, f"{target.name} is not available here for an interaction"
+        proposal = action.get("proposal") or {}
+        if not isinstance(proposal, dict):
+            return False, "proposal must be an object"
+        self._social_seq += 1
+        scene_id = f"{self.world_id}:scene:{self._social_seq}"
+        topic = str(action.get("topic") or "general").strip() or "general"
+        interaction = Interaction(
+            id=scene_id, initiator=agent.name, target=target.name,
+            location=agent.location, topic=topic, speech_act=speech_act,
+            proposal=dict(proposal), thread_id=action.get("thread_id"),
+            created_tick=self.tick_no, updated_tick=self.tick_no)
+        self.interactions[scene_id] = interaction
+        event = self.emit(
+            "interaction", agent.name,
+            f"opened a {speech_act} interaction with {target.name} about {topic}",
+            agent.location, target=target.name, topic=topic,
+            thread_id=interaction.thread_id)
+        interaction.source_event_id = event["event_id"]
+        interaction.last_event_id = event["event_id"]
+        return True, f"opened {speech_act} interaction {scene_id}"
+
+    def reconcile_commitments(self):
+        """Resolve durable commitments from completed projects or deadlines."""
+        changed = False
+        for commitment in self.commitments.values():
+            if commitment.status != "open":
+                continue
+            proof = commitment.proof or {}
+            project = next((item for item in self.projects
+                            if item.get("name") == proof.get("project")), None)
+            if proof.get("kind") == "project_complete" and project and project.get("complete"):
+                commitment.status = "fulfilled"
+                text = f"{commitment.owner} fulfilled their commitment to {commitment.counterparty}"
+            elif commitment.deadline_day is not None and self.clock.day > commitment.deadline_day:
+                commitment.status = "broken"
+                text = f"{commitment.owner} broke their commitment to {commitment.counterparty}"
+            else:
+                continue
+            owner, other = self.agents.get(commitment.owner), self.agents.get(commitment.counterparty)
+            if owner and other:
+                delta = 2 if commitment.status == "fulfilled" else -3
+                owner.relationships[other.name] = owner.relationships.get(other.name, 0) + delta
+                other.relationships[owner.name] = other.relationships.get(owner.name, 0) + delta
+                self.emit("commitment", owner.name, text, owner.location, target=other.name,
+                          deliver=False, topic="commitment")
+            changed = True
+        return changed
 
 
     def _verb_eat(self, agent, action):
@@ -1495,6 +1644,7 @@ class World:
     # one verb, one handler — physics stays legible
     _VERB_HANDLERS = {
         "move": _verb_move, "say": _verb_say, "text": _verb_text,
+        "interact": _verb_interact,
         "eat": _verb_eat, "build": _verb_build, "propose": _verb_propose,
         "treat": _verb_treat, "drink": _verb_drink, "pay": _verb_pay,
         "borrow": _verb_borrow, "work": _verb_work, "rest": _verb_rest,
@@ -1508,6 +1658,55 @@ class World:
         agent.last_action = action
         handler = self._VERB_HANDLERS.get(act, World._verb_idle)
         return handler(self, agent, action)
+
+    def _next_command_id(self):
+        self._command_seq += 1
+        return f"{self.world_id}:command:{self._command_seq}"
+
+    def apply_command(self, command):
+        """Apply a typed action command at the world's physics boundary."""
+        if not isinstance(command, Command):
+            raise TypeError("command must be a Command")
+        if command.command_id is None:
+            command.command_id = self._next_command_id()
+        if command.kind != "action":
+            return CommandResult(False,
+                                 f"unknown command kind {command.kind!r}",
+                                 command.command_id)
+        if command.actor not in self.agents:
+            return CommandResult(False,
+                                 f"unknown actor {command.actor!r}",
+                                 command.command_id)
+        return self.apply_effect(
+            command,
+            lambda: self.execute(self.agents[command.actor], command.payload),
+        )
+
+    def apply_effect(self, command, effect):
+        """Run a validated effect and associate emitted events with it."""
+        if not isinstance(command, Command):
+            raise TypeError("command must be a Command")
+        if command.command_id is None:
+            command.command_id = self._next_command_id()
+        before = self._event_seq
+        previous = self._active_command
+        self._active_command = command
+        try:
+            outcome = effect()
+            if (isinstance(outcome, tuple) and len(outcome) == 2 and
+                    isinstance(outcome[0], bool)):
+                accepted, summary = outcome
+            else:
+                accepted, summary = True, outcome
+        finally:
+            self._active_command = previous
+        event_ids = [
+            event["event_id"] for event in self.events
+            if before < event.get("seq", 0) <= self._event_seq
+            and event.get("command_id") == command.command_id
+        ]
+        return CommandResult(bool(accepted), summary, command.command_id,
+                             event_ids)
 
     # ---------------------------------------------------------- resolvers
     def _resolve_location(self, agent, name):

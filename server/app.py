@@ -86,7 +86,7 @@ async def recast(body: dict):
     """Brain transplant: swap which model plays a villager, mid-run.
     Body: {"agent": "<name>", "model": "<model tag>", "host": "<provider key>"}.
     Memories, money, and relationships stay — only the mind changes."""
-    from sim.brains import LLMBrain, MockBrain, providers
+    from sim.brains import providers
     name = body.get("agent", "")
     resolved = engine.world._resolve_agent(name)
     if not resolved:
@@ -102,17 +102,11 @@ async def recast(body: dict):
              "known": sorted(known)}, status_code=400)
     old = engine.world.agents[resolved].model
 
-    def apply():
-        agent = engine.world.agents[resolved]
-        core = LLMBrain(model, host)
-        core.understudy = MockBrain(resolved, engine.seed)
-        engine.brains[resolved].understudy = core
-        agent.model, agent.host = model, host
-        engine.world.emit("world", None,
-                          f"(something subtle changes behind {resolved}'s eyes)",
-                          agent.location, deliver=False)
-
-    engine.submit(apply, f"recast {resolved} -> {model}")
+    from sim.causality import Command
+    engine.submit(Command(
+        kind="recast", source="manual",
+        payload={"agent": resolved, "model": model, "host": host}),
+        f"recast {resolved} -> {model}")
     return {"recast": resolved, "was": old, "now": model, "host": host,
             "queued": True}
 
@@ -155,7 +149,10 @@ async def chaos(body: dict = None):
                              "known": sorted(known)}, status_code=400)
     # Queued rather than fired inline: see Engine.submit. Whatever the
     # Director decides shows up in the transcript a tick later.
-    engine.submit(lambda: engine.director.trigger(name), f"chaos {name or 'random'}")
+    from sim.causality import Command
+    engine.submit(Command(kind="director.event", source="manual",
+                          payload={"event": name}),
+                  f"chaos {name or 'random'}")
     return {"queued": True, "event": name or "a random roll"}
 
 
@@ -178,11 +175,10 @@ async def possess(name: str, body: dict):
     # Seat changes touch only the brain wrapper, never the world, so they
     # apply immediately — the seat has to answer a click even mid-tick.
     if "possess" in body:
-        b.possessed = bool(body["possess"])
+        b.set_possessed(body["possess"])
         return {"possessed": b.possessed}
     if "action" in body:
-        b.queued_action = body
-        b.possessed = True
+        b.queue_action(body)
         return {"queued": True}
     return JSONResponse({"error": "send {'possess': bool} or an action"}, status_code=400)
 
