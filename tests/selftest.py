@@ -73,6 +73,27 @@ def restore_knob(name, value, existed):
     elif hasattr(config, name):
         delattr(config, name)
 
+
+# Say what you are, out loud, first (v3.1.2). Brad hit the same crash on the
+# same line number twice in one morning — once because the suite had a real
+# bug, and once because the fixed file had not actually landed on disk. From
+# the output those are indistinguishable, and I misdiagnosed the second one
+# as the first. A harness that does not identify itself cannot be trusted to
+# report on anything else.
+def _stamp(what):
+    v = "unknown"
+    for p in (os.path.join(ROOT, "VERSION"), "VERSION"):
+        try:
+            v = open(p).read().strip()
+            break
+        except OSError:
+            pass
+    print(f"{what} — Pepperton v{v}  ({os.path.abspath(__file__)})",
+          flush=True)
+    return v
+
+_stamp("SELFTEST")
+
 results = []
 def check(name, ok, detail=""):
     results.append((name, ok, detail))
