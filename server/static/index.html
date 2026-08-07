@@ -1617,13 +1617,17 @@ $("socialGo").addEventListener("click", async () => {
     res.className = "err"; res.textContent = "a counter needs a project, hours, and deadline"; return;
   }
   const commitment = project ? {
-    kind: "project_contribution", project: project,
-    hours: Number(hours), deadline_day: Number(deadline),
+    condition: "contribute " + Number(hours) + " hours to " + project,
+    deadline_day: Number(deadline),
+    proof: { kind: "project_complete", project: project },
   } : null;
   const act = { action: "interact", act: actName };
   if (responding) {
     act.scene_id = $("socialScene").value;
-    if (commitment) act.proposal = { commitment: commitment };
+    if (commitment) {
+      if (actName === "accept") act.commitment = commitment;
+      else act.proposal = { commitment: commitment };
+    }
   } else {
     act.to = $("socialTarget").value;
     act.topic = topic;
