@@ -232,6 +232,8 @@
   }
 .ev.text { color: #7fd4c1; }
 .ev.gossip { color: #d8a5c8; font-weight: 500; }
+.ev.interaction { color: #b9a7ee; }
+.ev.commitment { color: #7dc4a0; }
 
 /* ---------------- control panel ---------------- */
 .ctlbtn {
@@ -268,6 +270,21 @@
 .note { font-size: 11px; color: var(--ink-dimmer); margin-top: 8px; line-height: 1.5; }
 .note.warn { color: var(--danger); }
 
+/* social observatory — uses the same compact control-panel language as Director */
+#socialPanel {
+  position: absolute; top: 52px; right: 18px; z-index: 40; width: 330px;
+  max-height: calc(100vh - 72px); overflow: auto;
+  background: #161a22; border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; display: none; box-shadow: 0 12px 34px rgba(0,0,0,.5);
+}
+#socialPanel.open { display: block; }
+#socialPanel .socialList { display: grid; gap: 7px; }
+#socialPanel .socialItem { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; font-size: 11px; line-height: 1.45; }
+#socialPanel .socialItem b { color: var(--ink); }
+#socialPanel .socialEmpty { color: var(--ink-dimmer); font-size: 11px; }
+#socialPanel .metricrow { display: flex; flex-wrap: wrap; gap: 5px; }
+#socialPanel .metric { font-size: 10px; color: var(--ink-dim); background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; }
+
 /* possession composer — lives OUTSIDE #inspbody so the 2s refresh
    never wipes what you are in the middle of typing */
 #possess {
@@ -280,6 +297,8 @@
 #possess .seatlabel.on { color: var(--danger); }
 #composer { display: none; }
 #composer.open { display: block; }
+#socialFields { display: none; }
+#socialFields.open { display: block; }
 #possess select, #possess input {
   background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
   font: inherit; font-size: 12px; padding: 5px 8px; border-radius: 7px; min-width: 0;
@@ -302,6 +321,7 @@
   <span id="seedbadge" class="badge">seed —</span>
   <span id="conn" class="badge">offline</span>
   <span class="spacer"></span>
+  <button id="socialBtn" class="ctlbtn">🤝 Social</button>
   <button id="dirBtn" class="ctlbtn">🎬 Director</button>
   <button id="pauseBtn">Pause</button>
 </header>
@@ -321,6 +341,19 @@
   <div class="note">A transplant keeps their memories, money and
     relationships — only the mind changes.</div>
   <div id="dirResult" class="note"></div>
+</div>
+
+<div id="socialPanel" aria-live="polite">
+  <div class="sect">Social observatory</div>
+  <div id="socialSummary" class="note">waiting for the town…</div>
+  <div class="sect">Open scenes</div>
+  <div id="socialScenes" class="socialList"></div>
+  <div class="sect">Open commitments</div>
+  <div id="socialCommitments" class="socialList"></div>
+  <div class="sect">Recorded outcomes</div>
+  <div id="socialHistory" class="socialList"></div>
+  <div class="sect">Signals</div>
+  <div id="socialMetrics" class="metricrow"></div>
 </div>
 
 <main>
@@ -357,6 +390,23 @@
             <button class="ctlbtn" id="actGo" style="padding:5px 14px;font-size:12px">Do it</button>
           </div>
           <div id="actResult"></div>
+          <div id="socialFields">
+            <div class="prow">
+              <select id="socialMode"></select>
+              <select id="socialTarget" style="flex:1"></select>
+              <select id="socialScene" style="flex:1;display:none"></select>
+            </div>
+            <div class="prow">
+              <select id="socialAct"></select>
+              <input id="socialTopic" placeholder="what this is about" />
+            </div>
+            <div class="prow">
+              <select id="socialProject" style="flex:1"></select>
+              <input id="socialHours" type="number" min="1" max="8" placeholder="hours" style="max-width:72px" />
+              <input id="socialDeadline" type="number" min="0" placeholder="day" style="max-width:72px" />
+              <button class="ctlbtn" id="socialGo" style="padding:5px 14px;font-size:12px">Social</button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="inspbody"></div>
@@ -598,7 +648,9 @@ function eventLine(ev) {
   } else if (!text && ev.type === "arrive") {
     text = "arrives at " + (ev.location || "?");
   }
-  const prefix = ev.type === "radio" ? "📻 " : (ev.type === "text" ? "📱 " : (ev.type === "gossip" ? "📢 " : ""));
+  const prefix = ev.type === "interaction" ? "🤝 social · " :
+    (ev.type === "commitment" ? "✓ commitment · " :
+    (ev.type === "radio" ? "📻 " : (ev.type === "text" ? "📱 " : (ev.type === "gossip" ? "📢 " : ""))));
   div.innerHTML =
     '<span class="t">' + esc(ev.sim_time || "") + "</span>" +
     (who ? '<span class="who">' + esc(who) + ":</span> " : "") +
@@ -612,6 +664,43 @@ function appendEvents(evs) {
   for (const ev of evs) frag.appendChild(eventLine(ev));
   feed.appendChild(frag);
   while (feed.children.length > 300) feed.removeChild(feed.firstChild);
+}
+
+function socialItem(label, detail) {
+  return '<div class="socialItem"><b>' + esc(label) + '</b><br>' + esc(detail) + '</div>';
+}
+
+function renderSocial(social) {
+  social = social || {};
+  const interactions = social.interactions || [];
+  const commitments = social.commitments || [];
+  const openScenes = interactions.filter((x) => x.status === "open");
+  const openCommitments = commitments.filter((x) => x.status === "open");
+  const outcomes = interactions.filter((x) => x.status !== "open")
+    .map((x) => ({ tick: x.updated_tick || 0, label: x.initiator + " ↔ " + x.target, detail: x.status + " · " + (x.topic || x.speech_act || "social scene") }))
+    .concat(commitments.filter((x) => x.status !== "open")
+      .map((x) => ({ tick: 0, label: x.owner + " → " + x.counterparty, detail: "commitment " + x.status })));
+
+  $("socialSummary").textContent = openScenes.length + " open scene" + (openScenes.length === 1 ? "" : "s") +
+    " · " + openCommitments.length + " open commitment" + (openCommitments.length === 1 ? "" : "s");
+  $("socialScenes").innerHTML = openScenes.length ? openScenes.slice(-8).reverse().map((x) =>
+    socialItem(x.initiator + " → " + x.target, (x.topic || x.speech_act || "conversation") + " · waiting on " + (x.next_responder || "—"))).join("") :
+    '<div class="socialEmpty">No open scenes.</div>';
+  $("socialCommitments").innerHTML = openCommitments.length ? openCommitments.slice(-8).reverse().map((x) =>
+    socialItem(x.owner + " → " + x.counterparty, "deadline day " + (x.deadline_day == null ? "—" : x.deadline_day))).join("") :
+    '<div class="socialEmpty">No open commitments.</div>';
+  $("socialHistory").innerHTML = outcomes.length ? outcomes.sort((a, b) => b.tick - a.tick).slice(0, 8).map((x) => socialItem(x.label, x.detail)).join("") :
+    '<div class="socialEmpty">No recorded outcomes yet.</div>';
+
+  const metrics = social.metrics || {};
+  const count = (obj) => Object.values(obj || {}).reduce((n, v) => n + (Number(v) || 0), 0);
+  $("socialMetrics").innerHTML = [
+    ["outcomes", count(metrics.interactions && metrics.interactions.outcomes)],
+    ["reactions", metrics.reactions && metrics.reactions.reactions || 0],
+    ["plan shifts", metrics.plan_changes && metrics.plan_changes.social_outcome || 0],
+  ].map(([label, value]) => '<span class="metric">' + esc(label) + ': ' + esc(value) + '</span>').join("");
+
+  if ($("socialFields").className === "open") syncInteractionFields();
 }
 
 feed.addEventListener("mouseenter", () => { state.feedHover = true; });
@@ -741,6 +830,7 @@ function handleSnapshot(snap) {
 
   updateHeader(snap);
   updateAgentTargets(snap);
+  renderSocial(snap.social);
 
   const fresh = (snap.events || []).filter((e) => e.seq > state.lastSeq);
   if (fresh.length) {
@@ -882,6 +972,8 @@ function renderInspector(d) {
   h += "</div>";
   if (d.quirk) h += '<div class="kv">quirk: <b>' + esc(d.quirk) + "</b></div>";
   if (d.goal) h += '<div class="kv">goal: <b>' + esc(d.goal) + "</b></div>";
+  if (Array.isArray(d.goals) && d.goals.length) h += '<div class="kv">public goals: <b>' + esc(d.goals.join(" · ")) + "</b></div>";
+  if (d.source) h += '<div class="kv">source: <b>' + esc(d.source) + "</b></div>";
   if (d.last_reason) h += '<div class="kv">thinking: <i>' + esc(d.last_reason) + "</i></div>";
 
   const rels = d.relationships || {};
@@ -1348,6 +1440,7 @@ const VERBS = {
   pay:     { to: "payee", num: true },
   borrow:  { num: true },
   idle:    { text: "what you do, e.g. 'browses the shelves'" },
+  interact:{ social: true },
 };
 
 const PAYEES = ["the bank", "the town fund", "the poor box"];
@@ -1374,6 +1467,14 @@ function townPlaces() {
 function syncComposerFields() {
   const spec = VERBS[$("verb").value] || {};
   const txt = $("argText"), to = $("argTo"), num = $("argNum");
+  const social = $("socialFields");
+  social.className = spec.social ? "open" : "";
+  $("row2").style.display = spec.social ? "none" : "";
+  if (spec.social) {
+    txt.style.display = "none";
+    syncInteractionFields();
+    return;
+  }
   txt.style.display = spec.text ? "" : "none";
   txt.placeholder = spec.text || "";
   num.style.display = spec.num ? "" : "none";
@@ -1387,6 +1488,35 @@ function syncComposerFields() {
     fillSelect(to, [{ v: "everyone", t: "everyone (group chat)" }].concat(townNames(me)),
                { placeholder: "message who…" });
   else fillSelect(to, townNames(me), { placeholder: spec.toOpt ? "(anyone here)" : "who…" });
+}
+
+function openScenesFor(name) {
+  return (((state.snap && state.snap.social) || {}).interactions || [])
+    .filter((x) => x.status === "open" && x.next_responder === name);
+}
+
+function syncInteractionFields() {
+  if (!state.insp.name) return;
+  fillSelect($("socialMode"), [
+    { v: "start", t: "start a scene" }, { v: "respond", t: "respond to a scene" },
+  ], { keep: true });
+  const mode = $("socialMode").value || "start";
+  const response = mode === "respond";
+  $("socialTarget").style.display = response ? "none" : "";
+  $("socialScene").style.display = response ? "" : "none";
+  $("socialTopic").style.display = response ? "none" : "";
+  const projects = (state.snap && state.snap.projects || [])
+    .filter((x) => !x.complete).map((x) => x.name);
+  fillSelect($("socialProject"), projects, { placeholder: "optional project…" });
+  if (response) {
+    fillSelect($("socialScene"), openScenesFor(state.insp.name).map((x) => ({
+      v: x.id, t: firstName(x.initiator) + " · " + (x.topic || x.speech_act || "scene"),
+    })), { placeholder: "which open scene…" });
+    fillSelect($("socialAct"), ["accept", "refuse", "defer", "counter", "leave"], { placeholder: "response…" });
+  } else {
+    fillSelect($("socialTarget"), townNames(state.insp.name), { placeholder: "with whom…" });
+    fillSelect($("socialAct"), ["request", "offer", "inform", "ask"], { placeholder: "speech act…" });
+  }
 }
 
 /* The inspector polls every 2s. A poll issued BEFORE you took or released
@@ -1427,10 +1557,12 @@ $("seatBtn").addEventListener("click", async () => {
 });
 
 $("verb").addEventListener("change", syncComposerFields);
+$("socialMode").addEventListener("change", syncInteractionFields);
 
 $("actGo").addEventListener("click", async () => {
   const verb = $("verb").value, spec = VERBS[verb] || {};
   const res = $("actResult");
+  if (spec.social) return;
   const act = { action: verb };
   const to = $("argTo").value, txt = $("argText").value.trim(), num = $("argNum").value;
 
@@ -1460,6 +1592,52 @@ $("actGo").addEventListener("click", async () => {
   } else {
     res.className = "err";
     res.textContent = data.error || "the town refused that";
+  }
+});
+
+$("socialGo").addEventListener("click", async () => {
+  const res = $("actResult"), responding = $("socialMode").value === "respond";
+  const actName = $("socialAct").value, topic = $("socialTopic").value.trim();
+  const project = $("socialProject").value, hours = $("socialHours").value;
+  const deadline = $("socialDeadline").value;
+  if (!actName) { res.className = "err"; res.textContent = "pick a speech act"; return; }
+  if (!responding && (!$("socialTarget").value || !topic)) {
+    res.className = "err"; res.textContent = "pick someone and name the topic"; return;
+  }
+  if (responding && !$("socialScene").value) {
+    res.className = "err"; res.textContent = "pick an open scene"; return;
+  }
+  if ((project && !hours) || (!project && hours)) {
+    res.className = "err"; res.textContent = "choose a project and hours together"; return;
+  }
+  if (project && !deadline) {
+    res.className = "err"; res.textContent = "a project commitment needs a deadline"; return;
+  }
+  if (actName === "counter" && (!project || !hours || !deadline)) {
+    res.className = "err"; res.textContent = "a counter needs a project, hours, and deadline"; return;
+  }
+  const commitment = project ? {
+    kind: "project_contribution", project: project,
+    hours: Number(hours), deadline_day: Number(deadline),
+  } : null;
+  const act = { action: "interact", act: actName };
+  if (responding) {
+    act.scene_id = $("socialScene").value;
+    if (commitment) act.proposal = { commitment: commitment };
+  } else {
+    act.to = $("socialTarget").value;
+    act.topic = topic;
+    if (commitment) act.proposal = { commitment: commitment };
+  }
+  res.className = ""; res.textContent = "queued — lands on the next tick…";
+  const { ok, data } = await seatPost(act);
+  if (ok && data.queued) {
+    res.className = "ok"; res.textContent = "queued: social scene — watch the transcript";
+    $("socialTopic").value = ""; $("socialProject").value = "";
+    $("socialHours").value = ""; $("socialDeadline").value = "";
+    seatStamp = performance.now(); updateSeat(true);
+  } else {
+    res.className = "err"; res.textContent = data.error || "the town refused that";
   }
 });
 
@@ -1509,7 +1687,20 @@ $("dirBtn").addEventListener("click", () => {
   const open = d.className !== "open";
   d.className = open ? "open" : "";
   $("dirBtn").className = "ctlbtn" + (open ? " on" : "");
-  if (open) fillSelect($("recastWho"), townNames(), { placeholder: "which villager…" });
+  if (open) {
+    $("socialPanel").className = ""; $("socialBtn").className = "ctlbtn";
+    fillSelect($("recastWho"), townNames(), { placeholder: "which villager…" });
+  }
+});
+
+$("socialBtn").addEventListener("click", () => {
+  const panel = $("socialPanel"), open = panel.className !== "open";
+  panel.className = open ? "open" : "";
+  $("socialBtn").className = "ctlbtn" + (open ? " on" : "");
+  if (open) {
+    $("director").className = ""; $("dirBtn").className = "ctlbtn";
+    renderSocial((state.snap || {}).social);
+  }
 });
 
 $("recastGo").addEventListener("click", async () => {
