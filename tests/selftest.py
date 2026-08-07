@@ -201,7 +201,11 @@ def _extra():
     for other in ags[1:]:
         e.brains[other.name] = NullBrain()
     before = a.relationships.get(b.name, 0)
-    e._nightly_reflections()
+    with e.lock:
+        reflection_tasks = e._prepare_reflections(force=True)
+    reflection_outcomes = e.scheduler.reflect(reflection_tasks)
+    with e.lock:
+        e._apply_reflections(reflection_tasks, reflection_outcomes)
     check("nightly warmth applies (+3)", a.relationships.get(b.name, 0) == before + 3,
           f"{before} -> {a.relationships.get(b.name, 0)}")
     check("goal arc resolves and rerolls", a.goal != old_goal,
