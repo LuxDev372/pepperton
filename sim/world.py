@@ -1060,6 +1060,27 @@ class World:
         """Open a bounded, co-located social scene through world physics."""
         speech_act = str(action.get("act") or action.get("speech_act") or
                          "request").strip().lower()
+        if speech_act in {"accept", "refuse", "defer"}:
+            scene = self.interactions.get(str(action.get("scene_id") or ""))
+            if scene is None or scene.status != "open":
+                return False, "there is no open interaction with that id"
+            if agent.name != scene.next_responder or agent.name != scene.target:
+                return False, "it is not this person's turn in the interaction"
+            initiator = self.agents.get(scene.initiator)
+            if initiator is None or initiator.asleep or agent.asleep or \
+                    initiator.location != scene.location or agent.location != scene.location:
+                return False, "both participants must remain awake at the scene location"
+            scene.status = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
+            scene.response_act = speech_act
+            scene.next_responder = None
+            scene.updated_tick = self.tick_no
+            past = {"accept": "accepted", "refuse": "refused", "defer": "deferred"}[speech_act]
+            event = self.emit("interaction", agent.name,
+                f"{past} {scene.initiator}'s {scene.topic} interaction",
+                scene.location, target=scene.initiator, topic=scene.topic,
+                thread_id=scene.thread_id)
+            scene.last_event_id = event["event_id"]
+            return True, f"{scene.status} the {scene.topic} interaction"
         if speech_act not in SPEECH_ACTS - {"accept", "refuse", "counter", "defer", "leave"}:
             return False, f"unsupported opening speech act {speech_act!r}"
         target_name = self._resolve_agent(action.get("to") or action.get("target"))
