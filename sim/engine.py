@@ -8,7 +8,7 @@ import config
 from sim import brains
 from sim.agents import generate_cast
 from sim.bus import BusRoute
-from sim.causality import Command
+from sim.causality import Command, CommandResult
 from sim.director import Director
 from sim.experiment import ExperimentLedger
 from sim.radio import Radio
@@ -126,6 +126,7 @@ class Engine:
         self._cmdq = []                 # API writes, applied between ticks
         self._cmdlock = threading.Lock()   # guards _cmdq only — never held
                                            # while a model is thinking
+        self._command_results = []      # bounded results from queued commands
         self._thread = None
         self._reflected_day = 0
         self._cached_snapshot = None    # rebuilt at the end of every tick
@@ -665,16 +666,55 @@ class Engine:
             self.step()
 
     # ----------------------------------------------------------- commands
-    def submit(self, fn, label=""):
-        """Queue a world mutation to run at the next tick boundary.
+    def dispatch(self, command):
+        """Apply a typed command at the current simulation boundary."""
+        with self.lock:
+            if command.kind == "director.event":
+                return self.world.apply_effect(
+                    command, lambda: self.director.apply_command(command))
+            if command.kind == "recast":
+                return self.world.apply_effect(
+                    command, lambda: self._apply_recast(command))
+            return self.world.apply_command(command)
+
+    def _apply_recast(self, command):
+        """Swap a villager's model inside the causal command boundary."""
+        from sim.brains import LLMBrain, MockBrain, providers
+
+        requested = command.payload.get("agent", "")
+        resolved = self.world._resolve_agent(requested)
+        if not resolved:
+            return False, f"no villager matching {requested!r}"
+        model = command.payload.get("model")
+        if not model:
+            return False, "need a model tag"
+        host = command.payload.get("host", "default")
+        if host not in providers():
+            return False, f"unknown provider key {host!r}"
+
+        core = LLMBrain(model, host)
+        core.understudy = MockBrain(resolved, self.seed)
+        self.brains[resolved].understudy = core
+        agent = self.world.agents[resolved]
+        agent.model, agent.host = model, host
+        self.world.emit(
+            "world", None,
+            f"(something subtle changes behind {resolved}'s eyes)",
+            agent.location, deliver=False, topic="recast")
+        return True, f"recast {resolved} -> {model}"
+
+    def submit(self, command_or_fn, label=""):
+        """Queue a typed command or legacy callable at the next tick boundary.
 
         API threads must not take engine.lock themselves: in live mode a
         tick holds it while five models think, so a Director click could
         block an HTTP request for the full model timeout (measured at 107s
         on a busy GPU). Writes are queued and applied between ticks — the
         same contract possession already uses for queued actions."""
+        if not isinstance(command_or_fn, Command) and not callable(command_or_fn):
+            raise TypeError("queued item must be a Command or callable")
         with self._cmdlock:
-            self._cmdq.append((fn, label))
+            self._cmdq.append((command_or_fn, label))
 
     def _drain_commands(self):
         import traceback
@@ -683,14 +723,19 @@ class Engine:
         if not pending:
             return
         with self.lock:
-            for fn, label in pending:
+            for queued, label in pending:
                 # every /api write in the system funnels through here with
                 # a label. An experiment with an unrecorded intervention in
                 # it is not an experiment.
                 self.exp.note_intervention(
                     "api", label, self.world.tick_no, self.world.clock.day)
                 try:
-                    fn()
+                    result = (self.dispatch(queued)
+                              if isinstance(queued, Command) else queued())
+                    if isinstance(result, CommandResult):
+                        self._command_results.append(result)
+                        if len(self._command_results) > 100:
+                            self._command_results = self._command_results[-100:]
                 except Exception:
                     print(f"[ENGINE] queued command {label!r} failed "
                           f"(town continues):", flush=True)
