@@ -175,11 +175,10 @@ async def possess(name: str, body: dict):
     # Seat changes touch only the brain wrapper, never the world, so they
     # apply immediately — the seat has to answer a click even mid-tick.
     if "possess" in body:
-        b.possessed = bool(body["possess"])
+        b.set_possessed(body["possess"])
         return {"possessed": b.possessed}
     if "action" in body:
-        b.queued_action = body
-        b.possessed = True
+        b.queue_action(body)
         return {"queued": True}
     return JSONResponse({"error": "send {'possess': bool} or an action"}, status_code=400)
 
