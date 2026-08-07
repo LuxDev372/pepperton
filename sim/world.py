@@ -131,6 +131,9 @@ class World:
         self._events_lock = threading.Lock()
         self._event_seq = 0
         self._command_seq = 0
+        self._social_seq = 0
+        self.interactions = {}
+        self.commitments = {}
         self._active_command = None
         self._closed = False
         _OPEN_WORLDS.append(self)

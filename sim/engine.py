@@ -14,6 +14,7 @@ from sim.experiment import ExperimentLedger
 from sim.policy import make_observation
 from sim.radio import Radio
 from sim.scheduler import DecisionTask, PolicyScheduler, ReflectionTask
+from sim.social import Commitment, Interaction
 from sim.store import TownStore
 from sim.townsfolk import Townsfolk
 from sim.world import World
@@ -176,6 +177,13 @@ class Engine:
             world.tills.update(state.get("tills", {}))
             world.debts = state.get("debts", [])
             world.promises = state.get("promises", [])
+            world._social_seq = state.get("social_seq", 0)
+            world.interactions = {
+                item["id"]: Interaction.from_dict(item)
+                for item in state.get("interactions", [])}
+            world.commitments = {
+                item["id"]: Commitment.from_dict(item)
+                for item in state.get("commitments", [])}
             world.ledger.seq = state.get("ledger_seq", 0)
             world.ledger.rent_day_done = state.get("rent_day_done", 0)
             world.ledger.swept_day = state.get("ledger_day_done", 0)
@@ -313,6 +321,11 @@ class Engine:
             "tills": self.world.tills,
             "debts": self.world.debts,
             "promises": self.world.promises,
+            "social_seq": self.world._social_seq,
+            "interactions": [item.to_dict()
+                             for item in self.world.interactions.values()],
+            "commitments": [item.to_dict()
+                            for item in self.world.commitments.values()],
             "ledger_seq": self.world.ledger.seq,
             "rent_day_done": self.world.ledger.rent_day_done,
             "ledger_day_done": self.world.ledger.swept_day,
@@ -941,6 +954,12 @@ class Engine:
                 "debts": [d for d in world.debts if d["status"] == "open"][-20:],
                 "promises": [p for p in world.promises if p["status"] == "open"][-10:],
             } if getattr(config, "ECONOMY", False) else None),
+            "social": {
+                "interactions": [item.to_public()
+                                 for item in world.interactions.values()][-50:],
+                "commitments": [item.to_public()
+                                for item in world.commitments.values()][-50:],
+            },
             "vitals": self.vitals(),
             "townsfolk": self.folk.snapshot(),
         }
