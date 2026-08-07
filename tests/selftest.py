@@ -1602,6 +1602,34 @@ def _experiment_ledger():
         check("a closed run says when it ended and why",
               rec and rec[0]["ended_reason"] == "test"
               and rec[0]["closed_utc"], rec[0]["ended_reason"] if rec else "")
+        # v3.2.1: checkpoint BEFORE close, or the closing hash describes a
+        # state one save behind the one the run actually ended in
+        check("and a closing state hash that matches the final checkpoint",
+              bool(rec and rec[0].get("closed_state_hash")),
+              rec[0].get("closed_state_hash") if rec else "")
+
+    # v3.2.1 — THE SHUTDOWN GAP. Nothing called engine.stop(), so close()
+    # never ran and every run stayed "running" forever. The ledger exists so
+    # a run cannot lie about itself afterward; a run that cannot say it
+    # finished is doing exactly that.
+    import server.app as appmod
+    src = open(appmod.__file__, encoding="utf-8").read()
+    check("the server closes the books on the way out",
+          'on_event("shutdown")' in src and "engine.stop()" in src, "")
+    # Read the parse tree, not the text: the docstring above this handler
+    # says "engine.stop()" in prose, and a string search happily matched the
+    # explanation instead of the code.
+    import ast as _ast
+    calls = []
+    for node in _ast.walk(_ast.parse(src)):
+        if isinstance(node, _ast.AsyncFunctionDef) and node.name == "_shutdown":
+            calls = [n.func.attr for n in _ast.walk(node)
+                     if isinstance(n, _ast.Call)
+                     and isinstance(n.func, _ast.Attribute)
+                     and n.func.attr in ("save_state", "stop")]
+    check("and checkpoints BEFORE it closes them",
+          calls == ["save_state", "stop"],
+          f"order matters — close() hashes the state file: {calls}")
     World.close_all()
     fresh_data()
 

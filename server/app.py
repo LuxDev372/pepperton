@@ -22,6 +22,32 @@ async def _startup():
     engine.start_background()
 
 
+@app.on_event("shutdown")
+async def _shutdown():
+    """Close the books on the way out (v3.2.1).
+
+    Nothing called engine.stop() — so ExperimentLedger.close() never ran,
+    and every run in data/experiments.json stayed marked "running" forever,
+    with no closed_utc and no closing state hash. A town restarted on Day
+    111 would leave an eleven-day window looking like it had never ended.
+
+    The ledger exists so a run cannot lie about itself afterward. A run
+    that cannot say it finished is a run lying about itself afterward.
+
+    Also takes a final checkpoint: the loop autosaves every 4 ticks, so a
+    clean shutdown was quietly discarding up to three ticks of a town's
+    life for no reason.
+    """
+    if engine is None:
+        return
+    try:
+        engine.save_state()    # checkpoint FIRST — close() hashes the file
+        engine.stop()          # ...so a closing hash describes the final state
+    except Exception:      # a failing shutdown must not hold the door
+        import traceback
+        traceback.print_exc()
+
+
 @app.get("/")
 async def index():
     return FileResponse(os.path.join(_STATIC, "index.html"))
