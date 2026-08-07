@@ -435,6 +435,17 @@ class ExternalBrain(BrainBase):
         with self._seat_lock:
             return self.possessed, self._seat_revision
 
+    def claim_possession(self, seat_revision, has_action):
+        """Consume a queued action only after its decision is accepted."""
+        with self._seat_lock:
+            if not self.possessed or self._seat_revision != seat_revision:
+                return False
+            if has_action:
+                if self.queued_action is None:
+                    return False
+                self.queued_action = None
+            return True
+
     def decide(self, agent, world, perceptions, memories):
         self.latest_observation = {
             "sim_time": world.clock.label,
@@ -447,11 +458,14 @@ class ExternalBrain(BrainBase):
         with self._seat_lock:
             possessed = self.possessed
             action = self.queued_action
-            self.queued_action = None
-        if possessed and action:
-            return action, "(external)", "possessed: external action"
+            revision = self._seat_revision
+        if possessed and action is not None:
+            return Decision(action, "(external)", "possessed: external action",
+                            source="possession", seat_revision=revision)
         if possessed:
-            return None, "(external)", "possessed: waiting for external action"
+            return Decision(None, "(external)",
+                            "possessed: waiting for external action",
+                            source="possession", seat_revision=revision)
         return self.understudy.decide(agent, world, perceptions, memories)
 
     def reflect(self, agent, day, day_memories):
