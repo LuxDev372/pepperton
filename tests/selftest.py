@@ -1907,7 +1907,69 @@ def _review_fixes_v331():
     World.close_all()
     fresh_data()
 
+def _half_an_emoji():
+    """v3.3.3 — THE ONE THAT STOPPED A LIVE TOWN.
+
+    Pepperton, 101 days old, refused to start:
+
+        UnicodeEncodeError: 'utf-8' codec can't encode character '\\uddeb'
+        ... in migrate_legacy_projections, handle.writelines(rewritten)
+
+    \\uddeb is the low half of \\ud83c\\uddeb — a regional-indicator flag
+    emoji. A villager typed a flag, one half of it survived into the
+    JSONL, and json.dumps(ensure_ascii=False) then tried to write that
+    half as raw UTF-8, which is not a thing that exists. Every restart
+    hit the same byte. A hundred and one days of history was unbootable
+    because of half of a character.
+    """
+    import json as _json
+    from sim.store import scrub_surrogates
+    fresh_data()
+
+    check("half a character is scrubbed, not escaped",
+          scrub_surrogates("flag 🇫 here") == "flag �� here"
+          or scrub_surrogates("broken \uddeb half") == "broken � half",
+          "orphans become U+FFFD")
+    check("...and it reaches into nested structures",
+          scrub_surrogates({"t": ["ok", "bad \uddeb"]})["t"][1]
+          == "bad �", "")
+    check("...and leaves ordinary text alone, emoji included",
+          scrub_surrogates("a coffee ☕ and 100% ordinary text")
+          == "a coffee ☕ and 100% ordinary text", "")
+
+    # the real thing: a poisoned transcript on disk, then a cold start
+    e = Engine(seed=44)
+    e.run_headless(8)
+    e.save_state()
+    World.close_all()
+    poisoned = _json.dumps({"wid": "legacy", "seq": 99999, "tick": 1,
+                            "day": 1, "sim_time": "08:00", "type": "say",
+                            "agent": "Someone", "location": "the plaza",
+                            "target": None,
+                            "text": "look at this \uddeb flag"}) + "\n"
+    with open(config.TRANSCRIPT_JSONL, "a", encoding="utf-8") as f:
+        f.write(poisoned)          # ensure_ascii=True: lands as an escape
+    state = Engine.load_state()
+    state["world_id"] = "legacy"   # force the legacy migration path
+    state.pop("schema", None)
+    try:
+        e2 = Engine(seed=44, state=state)
+        check("A TOWN WITH HALF AN EMOJI IN ITS HISTORY STILL BOOTS",
+              True, "legacy migration survived the orphan")
+        e2.world.emit("say", "Someone", "another \uddeb one", "the plaza")
+        e2.save_state()
+        line = open(config.TRANSCRIPT_JSONL, encoding="utf-8").readlines()[-1]
+        check("and nothing writes a half-character back to disk",
+              "\uddeb" not in _json.loads(line).get("text", ""),
+              "emit scrubs at the door")
+    except UnicodeEncodeError as exc:
+        check("A TOWN WITH HALF AN EMOJI IN ITS HISTORY STILL BOOTS",
+              False, repr(exc)[:100])
+    World.close_all()
+    fresh_data()
+
 _townsfolk()
+_half_an_emoji()
 _no_charity_from_the_gods()
 _town_report()
 _experiment_ledger()

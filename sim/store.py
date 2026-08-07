@@ -9,6 +9,7 @@ operations.
 
 import json
 import os
+import re
 import tempfile
 import threading
 import uuid
@@ -18,6 +19,36 @@ from sim.memory import MemoryStore
 
 
 SCHEMA_VERSION = 1
+
+# A lone surrogate is not text. It is half of a character.
+#
+# Pepperton stopped starting on 2026-08-07 with:
+#     UnicodeEncodeError: 'utf-8' codec can't encode character '\uddeb'
+# raised out of migrate_legacy_projections while rewriting the transcript.
+# \uddeb is the low half of \ud83c\uddeb — a regional-indicator flag emoji.
+# A villager typed a flag, one half of it survived into the JSONL, and every
+# subsequent start crashed on the same byte. A town that had run for a
+# hundred and one days could not boot because of half of an emoji.
+#
+# json.dumps(..., ensure_ascii=False) tries to emit that half raw and UTF-8
+# refuses it, correctly. Escaping it would preserve the corruption forever,
+# so we SCRUB instead: replace the orphan with U+FFFD, the character whose
+# entire job is to say "something was here and it was broken". The paired
+# halves of a real emoji are untouched — Python stores those as one code
+# point and this never sees them.
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def scrub_surrogates(value):
+    """Recursively replace orphaned surrogates in strings, keys and lists."""
+    if isinstance(value, str):
+        return _LONE_SURROGATE.sub("\ufffd", value)
+    if isinstance(value, dict):
+        return {scrub_surrogates(k): scrub_surrogates(v)
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub_surrogates(v) for v in value]
+    return value
 DEFAULT_STATE_PATH = "data/world_state.json"
 
 
@@ -145,14 +176,16 @@ class TownStore:
     def append_event(self, event):
         with self._lock:
             with open(self.transcript_jsonl, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+                handle.write(
+                    json.dumps(scrub_surrogates(event),
+                               ensure_ascii=False) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
 
     def append_log(self, line):
         with self._lock:
             with open(self.transcript_log, "a", encoding="utf-8") as handle:
-                handle.write(line)
+                handle.write(scrub_surrogates(line))
                 handle.flush()
 
     def append_event_with_log(self, event, line):
@@ -199,7 +232,9 @@ class TownStore:
                     legacy_events += 1
                     event["wid"] = self.world_id
                     changed = True
-                rewritten.append(json.dumps(event, ensure_ascii=False) + "\n")
+                rewritten.append(
+                    json.dumps(scrub_surrogates(event),
+                               ensure_ascii=False) + "\n")
                 events.append(event)
             existing_claim = self.memory.legacy_world_claim()
             if existing_claim and existing_claim != self.world_id:
@@ -290,7 +325,7 @@ class TownStore:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 for event in events:
-                    handle.write(self._log_line(event))
+                    handle.write(scrub_surrogates(self._log_line(event)))
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, self.transcript_log)

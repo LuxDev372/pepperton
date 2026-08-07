@@ -10,7 +10,7 @@ import threading
 
 import config
 from sim.ledger import Ledger
-from sim.store import TownStore
+from sim.store import TownStore, scrub_surrogates
 
 
 _WORDS = re.compile(r"[a-z0-9']+")
@@ -663,6 +663,12 @@ class World:
     # ------------------------------------------------------------- events
     def emit(self, etype, agent, text, loc, target=None, deliver=True):
         """Record an event; queue it as a perception for co-located agents."""
+        # Scrub half-characters at the door (v3.3.3). A villager typed a flag
+        # emoji, one half of the surrogate pair survived into the transcript,
+        # and every subsequent start of a 101-day-old town died rewriting it.
+        # This is the narrowest place to stand: every event in Pepperton — and
+        # so every memory derived from one — passes through here.
+        text = scrub_surrogates(text)
         with self._events_lock:
             self._event_seq += 1
             ev = {
