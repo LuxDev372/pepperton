@@ -80,6 +80,17 @@ def restore_knob(name, value, existed):
 # the output those are indistinguishable, and I misdiagnosed the second one
 # as the first. A harness that does not identify itself cannot be trusted to
 # report on anything else.
+# A piped harness must not die of SIGPIPE (v3.1.3). `selftest.py | head -1`
+# raised BrokenPipeError mid-run and looked exactly like a failure in the
+# suite, one morning after two other things had looked exactly like failures
+# in the suite. Python leaves SIGPIPE set to SIG_IGN; restoring the default
+# makes `| head` behave the way anyone piping a test runner expects.
+try:
+    import signal
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+except (ImportError, AttributeError, ValueError):
+    pass    # Windows has no SIGPIPE; nothing to defend against there
+
 def _stamp(what):
     v = "unknown"
     for p in (os.path.join(ROOT, "VERSION"), "VERSION"):
