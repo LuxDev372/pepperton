@@ -5,13 +5,12 @@ reality, not the models. An agent SAYS "I take the bread"; the world
 decides whether there is bread. Liars get caught by physics.
 """
 
-import json
-import os
 import re
 import threading
 
 import config
 from sim.ledger import Ledger
+from sim.store import TownStore
 
 
 _WORDS = re.compile(r"[a-z0-9']+")
@@ -76,14 +75,15 @@ class Clock:
         return prev < t <= self.minutes
 
 
-# every World built in this process, so a test harness can release the
-# transcript handles before wiping data/ (see World.close_all)
+# every World built in this process, so a test harness can release durable
+# store resources before wiping data/ (see World.close_all)
 _OPEN_WORLDS = []
 
 
 class World:
-    def __init__(self, cast, world_id="legacy"):
+    def __init__(self, cast, world_id="legacy", store=None):
         self.world_id = world_id
+        self.store = store or TownStore(world_id=world_id)
         self.clock = Clock()
         self.tick_no = 0
         self.agents = {a.name: a for a in cast}
@@ -123,25 +123,15 @@ class World:
         self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
         self._event_seq = 0
-        os.makedirs("data", exist_ok=True)
-        self._jsonl = open(config.TRANSCRIPT_JSONL, "a", encoding="utf-8")
-        self._log = open(config.TRANSCRIPT_LOG, "a", encoding="utf-8")
+        self._closed = False
         _OPEN_WORLDS.append(self)
 
     def close(self):
-        """Release the transcript handles. A server holds one World for its
-        whole life so this never mattered in production — but the test
-        harness builds many Worlds in one process against a shared data/
-        directory, and Engine<->World is a reference cycle, so CPython never
-        collects them promptly. On Windows the still-open handle blocks the
-        rmtree between test phases. (Found by review, v2.9.2.)"""
-        for handle in ("_jsonl", "_log"):
-            f = getattr(self, handle, None)
-            if f is not None and not f.closed:
-                try:
-                    f.close()
-                except OSError:
-                    pass
+        """Release durable-store resources owned by this world."""
+        if self._closed:
+            return
+        self._closed = True
+        self.store.close()
         try:
             _OPEN_WORLDS.remove(self)
         except ValueError:
@@ -594,28 +584,30 @@ class World:
     # ------------------------------------------------------------- events
     def emit(self, etype, agent, text, loc, target=None, deliver=True):
         """Record an event; queue it as a perception for co-located agents."""
-        self._event_seq += 1
-        ev = {
-            "wid": self.world_id,
-            "seq": self._event_seq,
-            "tick": self.tick_no,
-            "day": self.clock.day,
-            "sim_time": self.clock.hhmm,
-            "type": etype,
-            "agent": agent,
-            "location": loc,
-            "target": target,
-            "text": text,
-        }
         with self._events_lock:
+            self._event_seq += 1
+            ev = {
+                "wid": self.world_id,
+                "seq": self._event_seq,
+                "tick": self.tick_no,
+                "day": self.clock.day,
+                "sim_time": self.clock.hhmm,
+                "type": etype,
+                "agent": agent,
+                "location": loc,
+                "target": target,
+                "text": text,
+            }
+            who = f"{agent} -> {target}" if target else (agent or "WORLD")
+            log_written = self.store.append_event_with_log(
+                ev, f"[{self.clock.label}] [{loc}] {etype.upper():8s} "
+                f"{who}: {text}\n")
             self.events.append(ev)
             if len(self.events) > 600:
                 self.events = self.events[-400:]
-        self._jsonl.write(json.dumps(ev) + "\n")
-        self._jsonl.flush()
-        who = f"{agent} -> {target}" if target else (agent or "WORLD")
-        self._log.write(f"[{self.clock.label}] [{loc}] {etype.upper():8s} {who}: {text}\n")
-        self._log.flush()
+        if not log_written:
+            print("[STORE] transcript.log append failed; the durable event "
+                  "stream will rebuild it on recovery", flush=True)
         if deliver:
             self._deliver(ev)
         return ev

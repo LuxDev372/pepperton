@@ -1198,11 +1198,11 @@ def _review_fixes_v292():
     check("no raw config reads of optional knobs in permit_sweep",
           "config.CONDEMN_GRACE_DAYS" not in src, "")
 
-    # 7. transcript handles can be released (Windows harness gap)
+    # 7. durable store resources can be released (Windows harness gap)
     e = Engine(seed=90)
     worldmod.World.close_all()
-    check("worlds release their transcript handles on demand",
-          e.world._jsonl.closed and e.world._log.closed, "")
+    check("worlds release their durable stores on demand",
+          e.world._closed, "")
     fresh_data()
 
 def _vitals():

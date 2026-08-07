@@ -34,7 +34,8 @@ def main():
         config.WORLD_SEED = args.seed
     if args.fresh:
         import os
-        for p in ("data/world_state.json", "data/world_state.json.tmp"):
+        state_path = getattr(config, "STATE_PATH", "data/world_state.json")
+        for p in (state_path, state_path + ".tmp"):
             if os.path.exists(p):
                 os.remove(p)
 

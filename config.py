@@ -549,6 +549,7 @@ WS_PUSH_INTERVAL = 0.5      # seconds between websocket state pushes
 
 # ---------------------------------------------------------------- data
 DB_PATH = "data/pepperton.db"
+STATE_PATH = "data/world_state.json"
 TRANSCRIPT_JSONL = "data/transcript.jsonl"
 TRANSCRIPT_LOG = "data/transcript.log"
 
