@@ -16,6 +16,7 @@ os.environ.setdefault("PEPPERTON_TEST", "1")
 import config
 from sim.causality import Command
 from sim.engine import Engine
+from sim.social import Commitment
 
 config.MOCK_MODE = True
 config.RADIO_ENABLED = False
@@ -83,5 +84,12 @@ committed = engine.dispatch(Command(
 check("acceptance creates a durable commitment", committed.accepted and
       fourth_scene.commitment_id in engine.world.commitments and
       engine.world.commitments[fourth_scene.commitment_id].condition == "bring plans")
+project = engine.world.projects[0]
+proof_commitment = Commitment("proof-1", left.name, right.name, "finish it",
+    proof={"kind": "project_complete", "project": project["name"]})
+engine.world.commitments[proof_commitment.id] = proof_commitment
+project["complete"] = True
+check("completed project fulfills commitment", engine.world.reconcile_commitments() and
+      proof_commitment.status == "fulfilled")
 engine.stop()
 print("Social-open proof complete")

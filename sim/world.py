@@ -1152,6 +1152,33 @@ class World:
         interaction.last_event_id = event["event_id"]
         return True, f"opened {speech_act} interaction {scene_id}"
 
+    def reconcile_commitments(self):
+        """Resolve durable commitments from completed projects or deadlines."""
+        changed = False
+        for commitment in self.commitments.values():
+            if commitment.status != "open":
+                continue
+            proof = commitment.proof or {}
+            project = next((item for item in self.projects
+                            if item.get("name") == proof.get("project")), None)
+            if proof.get("kind") == "project_complete" and project and project.get("complete"):
+                commitment.status = "fulfilled"
+                text = f"{commitment.owner} fulfilled their commitment to {commitment.counterparty}"
+            elif commitment.deadline_day is not None and self.clock.day > commitment.deadline_day:
+                commitment.status = "broken"
+                text = f"{commitment.owner} broke their commitment to {commitment.counterparty}"
+            else:
+                continue
+            owner, other = self.agents.get(commitment.owner), self.agents.get(commitment.counterparty)
+            if owner and other:
+                delta = 2 if commitment.status == "fulfilled" else -3
+                owner.relationships[other.name] = owner.relationships.get(other.name, 0) + delta
+                other.relationships[owner.name] = other.relationships.get(owner.name, 0) + delta
+                self.emit("commitment", owner.name, text, owner.location, target=other.name,
+                          deliver=False, topic="commitment")
+            changed = True
+        return changed
+
 
     def _verb_eat(self, agent, action):
         if agent.needs["fullness"] >= 85:

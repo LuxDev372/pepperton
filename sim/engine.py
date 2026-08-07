@@ -605,6 +605,7 @@ class Engine:
                 self.world.attendance_ledger()
         self.bus.step()   # the coach route (v2.8) — outside money, open doors
         self.folk.step()  # the townsfolk (v3.0) — presence, doors, odd jobs
+        self.world.reconcile_commitments()
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
