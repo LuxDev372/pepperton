@@ -1503,6 +1503,35 @@ def _town_report():
     check("and talk alone fires no law at all",
           not build({}, talk)["laws"], "")
 
+    # v3.2.0 — THE DAY 100 GAP. This report could say Walt had 185 shifts and
+    # that 9 shifts happened in the last eleven days, and could NOT say
+    # whether any of those 9 were his. Settling the verdict took a
+    # hand-written script against the raw transcript. Rebuilt here in the
+    # exact shape of the real Day 90-100 data: Walt 9, Ash 1, five idle.
+    day100 = ([{"type": "action", "agent": "Walt Crane", "day": d,
+                "sim_time": "08:00", "text": "started a shift at Rosie's Diner"}
+               for d in (90, 94, 94, 95, 95, 96, 97, 97, 100)]
+              + [{"type": "action", "agent": "Ash Holt", "day": 90,
+                  "sim_time": "11:15",
+                  "text": "started a shift at First Bank of Pepperton"}]
+              + [{"type": "action", "agent": "Nora Tibbs", "day": 40,
+                  "sim_time": "09:00", "text": "started a shift at the Rusty Tap"}])
+    w = {n: e for n, e in build({}, day100)["window_work"]}
+    check("the report can name WHO worked in the window, not just how many",
+          sorted(w) == ["Ash Holt", "Walt Crane"]
+          and len(w["Walt Crane"]) == 9 and len(w["Ash Holt"]) == 1,
+          "Walt 9, Ash 1 — the Day 100 answer, from the report itself")
+    check("and an old shift outside the window is NOT counted in it",
+          "Nora Tibbs" not in w, "her Day 40 shift stays out of Day 90-100")
+    attempt = [{"type": "action", "agent": "Frank Grady", "day": 100,
+                "sim_time": "08:00",
+                "text": "showed up for a shift and was sent home — "
+                        "the till is dry"}]
+    fw = dict(build({}, attempt)["window_work"])
+    check("showing up and being sent home is recorded as an ATTEMPT",
+          fw.get("Frank Grady") and fw["Frank Grady"][0][2] == "turned away",
+          "the pre-registered bar counts it; the report must show it")
+
     check("the report NEVER writes into the town's data directory",
           sorted(os.listdir(data_dir)) == before,
           str(set(os.listdir(data_dir)) ^ set(before)))

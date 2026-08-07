@@ -90,6 +90,11 @@ def load_runs(data_dir, world_id):
 # 'world' and 'action' events; speech is 'say', 'gossip' and 'text'.
 LAW_EVENT_TYPES = ("world", "action")
 
+# How many recent days the per-worker breakdown covers. Eleven, because that
+# is the length of an experiment window in this project (Day 90–100), and
+# this section exists to answer "who actually worked during the window".
+WINDOW_DAYS = 11
+
 LAWS = [
     ("FORECLOSURE at",        "crit", "the Holt Act — the bank took a house"),
     ("has PURCHASED",         "warn", "the debt market — the bank bought the town's arrears"),
@@ -133,18 +138,45 @@ def build(state, events, runs=()):
     out["cast"] = sorted(cast, key=lambda c: -c["money"])
 
     # work history per day, and who did it
+    #
+    # v3.2.0 adds the third view, and it is the one that matters. On Day 100
+    # this report could say Walt had 185 shifts and that 9 shifts happened in
+    # the last eleven days — and could NOT say whether any of those 9 were
+    # his. That is the single question an experiment window asks, and the
+    # tool built to answer questions about towns could not answer it. Brad
+    # had to run a hand-written script against the raw transcript to settle
+    # the verdict. Never again.
     shifts = defaultdict(int)
     by_worker = Counter()
+    recent = defaultdict(list)      # name -> [(day, time, kind)]
+    turned = defaultdict(list)      # showed up, sent home — an ATTEMPT
+    last_day = max((e.get("day", 0) for e in events), default=0)
+    since = max(1, last_day - WINDOW_DAYS + 1)
     for ev in events:
         if ev.get("type") != "action":
             continue        # a shift is a thing done, not a thing said
         t = str(ev.get("text", ""))
-        if "started a shift" in t or "on an empty till" in t:
-            shifts[ev.get("day", 0)] += 1
-            if ev.get("agent"):
-                by_worker[ev["agent"]] += 1
+        day, who = ev.get("day", 0), ev.get("agent")
+        started = "started a shift" in t or "on an empty till" in t
+        if started:
+            shifts[day] += 1
+            if who:
+                by_worker[who] += 1
+        if not who or day < since:
+            continue
+        if started:
+            recent[who].append((day, ev.get("sim_time"),
+                                "opened on an empty till"
+                                if "on an empty till" in t else "shift"))
+        elif "sent home" in t:
+            turned[who].append((day, ev.get("sim_time"), "turned away"))
     out["shifts_by_day"] = dict(sorted(shifts.items()))
     out["shifts_by_worker"] = by_worker.most_common()
+    out["window"] = {"since": since, "until": last_day}
+    out["window_work"] = sorted(
+        ((name, sorted(recent.get(name, []) + turned.get(name, [])))
+         for name in set(recent) | set(turned)),
+        key=lambda kv: (-len(kv[1]), kv[0]))
 
     # words vs deeds — the number this project exists to look at
     said = sum(1 for e in events if e.get("type") in ("say", "gossip", "text"))
@@ -376,6 +408,23 @@ def render(town, r, version):
         f'<span class="what">{esc(i.get("kind"))}: {esc(i.get("detail"))}'
         f'</span></li>' for i in hands[-25:])
 
+    # who worked LATELY, by name — the experiment question
+    win = r.get("window") or {}
+    ww = r.get("window_work") or []
+    idle = sorted(c["name"] for c in r["cast"]
+                  if c["name"] not in {n for n, _ in ww})
+    winrows = "".join(
+        f'<tr><td><b>{esc(name)}</b></td><td class="num">'
+        f'{sum(1 for e in ev if e[2] != "turned away")}</td>'
+        f'<td class="sub">'
+        + " · ".join(f'Day {esc(d)} {esc(t)}'
+                     + (f' <i>({esc(k)})</i>' if k != "shift" else '')
+                     for d, t, k in ev[:12])
+        + (' …' if len(ev) > 12 else '')
+        + '</td></tr>'
+        for name, ev in ww) or \
+        '<tr><td colspan="3" class="muted">nobody worked at all</td></tr>'
+
     # the work-history table is the relief for the chart (contrast rule)
     workrows = "".join(
         f'<tr><td>Day {esc(d)}</td><td class="num">{n}</td></tr>'
@@ -493,6 +542,16 @@ interventions.</p>
 <details><summary>Show the numbers</summary>
 <table><thead><tr><th>Day</th><th>Shifts</th></tr></thead>
 <tbody>{workrows}</tbody></table></details>
+
+<h2>Who worked lately — Day {esc(win.get("since"))}&ndash;{esc(win.get("until"))}</h2>
+<p class="sub">Every shift and every attempt in the last {WINDOW_DAYS} days,
+by name and by hour. Showing up and being sent home unpaid counts as an
+attempt and is listed. This is the section an experiment window is read
+from — the totals above cover a whole life and cannot answer it.</p>
+<table><thead><tr><th>Villager</th><th>Shifts</th><th>When</th></tr></thead>
+<tbody>{winrows}</tbody></table>
+{f'<p class="sub"><b>Nobody at all, in {WINDOW_DAYS} days:</b> '
+ f'{esc(", ".join(idle))}.</p>' if idle else ''}
 
 <h2>The laws that fired</h2>
 <p class="sub">Each statute in this town was passed in response to something a
