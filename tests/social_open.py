@@ -45,5 +45,22 @@ rejected = engine.dispatch(Command(
     kind="action", source="test", actor=left.name,
     payload={"action": "interact", "to": right.name, "topic": "library"}))
 check("separated participant is rejected", not rejected.accepted)
+right.location = left.location
+accepted = engine.dispatch(Command(
+    kind="action", source="test", actor=right.name,
+    payload={"action": "interact", "act": "accept", "scene_id": scene.id}))
+check("designated responder accepts", accepted.accepted and scene.status == "accepted")
+wrong = engine.dispatch(Command(
+    kind="action", source="test", actor=left.name,
+    payload={"action": "interact", "act": "refuse", "scene_id": scene.id}))
+check("closed scene rejects a second response", not wrong.accepted)
+opened = engine.dispatch(Command(
+    kind="action", source="test", actor=left.name,
+    payload={"action": "interact", "to": right.name, "topic": "park"}))
+second = list(engine.world.interactions.values())[-1]
+deferred = engine.dispatch(Command(
+    kind="action", source="test", actor=right.name,
+    payload={"action": "interact", "act": "defer", "scene_id": second.id}))
+check("designated responder defers", opened.accepted and deferred.accepted and second.status == "deferred")
 engine.stop()
 print("Social-open proof complete")
