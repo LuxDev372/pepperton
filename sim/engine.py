@@ -9,6 +9,7 @@ from sim import brains
 from sim.agents import generate_cast
 from sim.bus import BusRoute
 from sim.director import Director
+from sim.experiment import ExperimentLedger
 from sim.memory import MemoryStore
 from sim.radio import Radio
 from sim.townsfolk import Townsfolk
@@ -102,6 +103,7 @@ class Engine:
         self.folk = Townsfolk(self.world,
                               random.Random(f"townsfolk:{self.seed}"))
         self.world.folk = self.folk   # the work verb reaches odd jobs
+        self.exp = ExperimentLedger()   # what prevents the TV from lying
         self.paused = False
         self.running = False
         self.lock = threading.RLock()   # guards world/brains vs API threads
@@ -326,6 +328,8 @@ class Engine:
         with open(tmp, "w", encoding="utf-8") as f:
             _json.dump(state, f)
         _os.replace(tmp, STATE_PATH)
+        self.exp.update(self)
+        self.exp.write()
 
     @staticmethod
     def load_state():
@@ -543,6 +547,8 @@ class Engine:
 
     # -------------------------------------------------------------- step
     def step(self):
+        if self.exp.run is None:
+            self.exp.open_run(self, restored=self.world.tick_no > 0)
         self.world.tick_no += 1
         self.world.clock.tick()
         self.radio.maybe_broadcast(self.world)
@@ -666,6 +672,11 @@ class Engine:
             return
         with self.lock:
             for fn, label in pending:
+                # every /api write in the system funnels through here with
+                # a label. An experiment with an unrecorded intervention in
+                # it is not an experiment.
+                self.exp.note_intervention(
+                    "api", label, self.world.tick_no, self.world.clock.day)
                 try:
                     fn()
                 except Exception:
@@ -704,6 +715,7 @@ class Engine:
 
     def stop(self):
         self.running = False
+        self.exp.close(self, "stopped")
 
     # ------------------------------------------------------------- state
     def snapshot(self, since_seq=0):
@@ -788,6 +800,7 @@ class Engine:
 
     def _record_provenance(self, agent, reason):
         src = self.decision_source(reason)
+        self.exp.note_decision(src)
         was = getattr(agent, "last_source", None)
         agent.last_source = src
         if was is not None and was != src:

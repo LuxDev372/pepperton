@@ -31,7 +31,13 @@ class Director:
 
     def trigger(self, name=None):
         """Fire one chaos event (random weighted unless named). Returns a
-        short description of what happened, for the API."""
+        short description of what happened, for the API.
+
+        A NAMED event is a human pressing the god button; an unnamed one is
+        the dice. The experiment ledger records both, and marks which was
+        which — an intervention nobody wrote down is how a story becomes
+        mistaken for a finding."""
+        manual = name is not None
         event_weights = dict(config.CHAOS["weights"])
         if self.strangers_added >= config.CHAOS["max_strangers"]:
             event_weights.pop("stranger", None)
@@ -42,6 +48,10 @@ class Director:
         fn = getattr(self, f"_ev_{name}", None)
         if fn is None:
             return f"unknown event {name!r}"
+        exp = getattr(self.engine, "exp", None)
+        if exp is not None:
+            world = self.engine.world
+            exp.note_director(name, manual, world.tick_no, world.clock.day)
         return fn()
 
     # ------------------------------------------------------------ helpers

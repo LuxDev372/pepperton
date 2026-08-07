@@ -1407,14 +1407,128 @@ def _town_report():
         check("and it renders in both light and dark",
               "prefers-color-scheme: dark" in page
               and 'data-theme="dark"' in page, "")
+        # v3.1.0: the report must never publish a script as a finding
+        check("it asks whether the town was real, and answers from the ledger",
+              "Was any of this real?" in page
+              and "ran in mock mode" in page,
+              "mock run declared a rehearsal")
+        check("and it names every hand that reached in",
+              "reached in" in page, "")
+        check("a mock town is NOT advertised as a town of language models",
+              "minds switched off" in page
+              and "Nobody is playing them" not in page,
+              "the headline claim follows the ledger")
+
+    # v3.1.0: the jar row used to count villagers SAYING 'poor box'
+    from tools.townreport import build, LAW_EVENT_TYPES
+    talk = [{"type": "say", "agent": "A", "day": 1,
+             "text": "we should all put something in the poor box"}] * 50
+    deed = [{"type": "action", "agent": "A", "day": 1,
+             "text": "dropped $5 in the poor box on the diner counter"}]
+    rows = {l["label"]: l["n"] for l in build({}, talk + deed)["laws"]}
+    check("a law counts DEEDS, not villagers talking about the law",
+          rows.get("the jar") == 1, f"jar={rows.get('the jar')} (50 said, 1 did)")
+    check("and talk alone fires no law at all",
+          not build({}, talk)["laws"], "")
+
     check("the report NEVER writes into the town's data directory",
           sorted(os.listdir(data_dir)) == before,
           str(set(os.listdir(data_dir)) ^ set(before)))
     fresh_data()
 
+def _experiment_ledger():
+    """v3.1.0: the ledger is what prevents the television from lying.
+
+    We narrated MockBrain's own house-buying heuristic as emergent
+    capitalism for ten days because nothing in any record said what was
+    actually running. These checks assert the record now exists, that it
+    counts what it claims to count, and — most importantly — that it is
+    INERT: a ledger that could move a town is worse than no ledger."""
+    import json
+    fresh_data()
+    e = Engine(seed=311)
+    e.run_headless(30)
+
+    run = e.exp.run
+    check("a run opens itself the moment the first tick lands",
+          run is not None and run["run_id"], run["run_id"] if run else "none")
+    check("it records what code and config were live",
+          bool(run["code_version"]) and bool(run["config_hash"])
+          and bool(run["prompts_hash"]),
+          f"{run['code_version']} cfg={run['config_hash']}")
+    check("it records the seed and whether the minds were real",
+          run["seed"] == 311 and run["mock_mode"] is True, "")
+    check("it records the cast WITH their models and hosts",
+          len(run["cast"]) == len(e.world.agents)
+          and all(c["model"] for c in run["cast"]), "")
+    check("it records which optional laws were armed",
+          "foreclosure" in run["laws_armed"] and "bus" in run["laws_armed"]
+          and run["laws_armed"]["townsfolk"] is False, "")
+
+    integ = e.exp.integrity()
+    check("it counts every decision by who made it",
+          integ["decisions"] > 0 and integ["live_pct"] is not None,
+          f"{integ['decisions']} decisions, {integ['live_pct']}% live")
+    check("mock minds are NOT counted as live thought",
+          integ["live"] == 0 and integ["understudy"] == integ["decisions"],
+          f"live={integ['live']} understudy={integ['understudy']}")
+    check("and a mock run is therefore never 'clean'",
+          integ["clean"] is False, "")
+
+    # interventions: the whole reason this file exists
+    before = len(run["interventions"])
+    e.exp.note_intervention("api", "possess Walt Crane", 99, 4)
+    check("a human reaching into the town is recorded, with the tick",
+          len(run["interventions"]) == before + 1
+          and run["interventions"][-1]["tick"] == 99,
+          run["interventions"][-1]["detail"])
+    e.director.trigger("dead_air")
+    check("and so is a Director event fired by hand",
+          any(i["kind"] == "director" for i in run["interventions"]),
+          str(run["director_events"]))
+
+    # it survives to disk, honestly
+    e.save_state()
+    e.exp.close(e, "test")
+    path = e.exp.path
+    check("the ledger lands on disk as its own file",
+          os.path.exists(path), path)
+    if os.path.exists(path):
+        book = json.load(open(path, encoding="utf-8"))
+        rec = [r for r in book["runs"] if r["run_id"] == run["run_id"]]
+        check("one record per run, not one per write",
+              len(rec) == 1, f"{len(book['runs'])} runs on file")
+        check("a closed run says when it ended and why",
+              rec and rec[0]["ended_reason"] == "test"
+              and rec[0]["closed_utc"], rec[0]["ended_reason"] if rec else "")
+    World.close_all()
+    fresh_data()
+
+    # THE ONE THAT MATTERS: the observer must not disturb the observed.
+    # Same seed, ledger on and off, tick for tick.
+    def fingerprint(disabled):
+        fresh_data()
+        eng = Engine(seed=808)
+        eng.exp.enabled = not disabled
+        eng.run_headless(60)
+        w = eng.world
+        shot = [(a.name, round(a.money, 2), a.location, a.asleep,
+                 round(a.needs["energy"], 3)) for a in
+                sorted(w.agents.values(), key=lambda x: x.name)]
+        shot.append(("__tills__", sorted((k, round(v, 2))
+                                         for k, v in w.tills.items())))
+        World.close_all()
+        return shot
+
+    check("THE LEDGER MOVES NOTHING — same seed, on and off, identical",
+          fingerprint(False) == fingerprint(True),
+          "60 ticks, purses, positions, needs and tills")
+    fresh_data()
+
 _townsfolk()
 _no_charity_from_the_gods()
 _town_report()
+_experiment_ledger()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

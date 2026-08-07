@@ -528,6 +528,14 @@ DB_PATH = "data/pepperton.db"
 TRANSCRIPT_JSONL = "data/transcript.jsonl"
 TRANSCRIPT_LOG = "data/transcript.log"
 
+# The experiment ledger (v3.1.0). One record per engine lifetime: code
+# version, config hash, seed, the cast with their models, every decision
+# counted by WHO made it, and every time a human reached in. Leave this on.
+# We once narrated ten days of a scripted understudy as emergent behaviour
+# because nothing on disk said what had actually been running.
+EXPERIMENT_LEDGER = True
+LEDGER_PATH = "data/experiments.json"
+
 # ------------------------------------------------------- decision cadence
 # The brain (LLM) is consulted only when something warrants it — activity
 # finished, someone spoke to them, radio bulletin, a need went urgent —

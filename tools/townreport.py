@@ -59,9 +59,37 @@ def load(data_dir):
     return state, events
 
 
+def load_runs(data_dir, world_id):
+    """The experiment ledger for THIS town, newest run last.
+
+    Without this section the report is a very handsome way to publish a
+    story about a script. Every number above it — shifts, wallets, laws —
+    is only worth reading if the minds were actually running while it
+    happened, and the only place that is recorded is here."""
+    path = os.path.join(data_dir, "experiments.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            runs = json.load(f).get("runs", [])
+    except (OSError, ValueError):
+        return []
+    if world_id:
+        runs = [r for r in runs if r.get("world_id") in (world_id, None)]
+    return runs
+
+
 # --------------------------------------------------------------- the story
 # Each law leaves a fingerprint in the transcript. This is how a town's own
 # legal history is recovered from what actually happened to it.
+#
+# A law fires when the WORLD records it, never when a villager MENTIONS it.
+# v3.0.1 counted both, and the jar row read 424 in a town where the jar had
+# been used a handful of times — every one of those hits was somebody saying
+# "the poor box" out loud, which this town does constantly, because talking
+# about charity is the cheapest virtue available to it. The report was
+# measuring the conversation and calling it the law. Statutes leave marks in
+# 'world' and 'action' events; speech is 'say', 'gossip' and 'text'.
+LAW_EVENT_TYPES = ("world", "action")
+
 LAWS = [
     ("FORECLOSURE at",        "crit", "the Holt Act — the bank took a house"),
     ("has PURCHASED",         "warn", "the debt market — the bank bought the town's arrears"),
@@ -82,8 +110,9 @@ LAWS = [
 ]
 
 
-def build(state, events):
+def build(state, events, runs=()):
     out = {}
+    out["runs"] = list(runs)
     agents = state.get("agents", {})
     out["day"] = state.get("day", 0)
     out["tick"] = state.get("tick_no", 0)
@@ -107,6 +136,8 @@ def build(state, events):
     shifts = defaultdict(int)
     by_worker = Counter()
     for ev in events:
+        if ev.get("type") != "action":
+            continue        # a shift is a thing done, not a thing said
         t = str(ev.get("text", ""))
         if "started a shift" in t or "on an empty till" in t:
             shifts[ev.get("day", 0)] += 1
@@ -120,10 +151,11 @@ def build(state, events):
     did = sum(1 for e in events if e.get("type") == "action")
     out["said"], out["did"] = said, did
 
-    # the legal history
+    # the legal history — deeds only, never talk about deeds
+    deeds = [e for e in events if e.get("type") in LAW_EVENT_TYPES]
     hits = []
     for needle, tone, label in LAWS:
-        matched = [e for e in events if needle in str(e.get("text", ""))]
+        matched = [e for e in deeds if needle in str(e.get("text", ""))]
         if matched:
             hits.append({"label": label, "tone": tone, "n": len(matched),
                          "first": matched[0], "last": matched[-1]})
@@ -132,7 +164,7 @@ def build(state, events):
     # headline moments, in order, deduplicated
     big = []
     seen = set()
-    for ev in events:
+    for ev in deeds:
         t = str(ev.get("text", ""))
         for needle, tone, _ in LAWS:
             if needle in t and tone in ("crit", "warn", "good"):
@@ -169,6 +201,25 @@ def build(state, events):
     step = max(1, len(quotes) // 24)
     out["quotes"] = quotes[::step][:24]
     out["events_total"] = len(events)
+
+    # how much of this town was actually thought
+    decisions = understudy = live = unparsed = interventions = 0
+    mock_runs = 0
+    for run in out["runs"]:
+        d = run.get("decisions") or {}
+        decisions += sum(d.values())
+        live += d.get("model", 0) + d.get("possessed", 0)
+        understudy += d.get("understudy", 0) + d.get("dark", 0)
+        unparsed += d.get("unparsed", 0)
+        interventions += len(run.get("interventions") or [])
+        if run.get("mock_mode"):
+            mock_runs += 1
+    out["integrity"] = {
+        "runs": len(out["runs"]), "decisions": decisions, "live": live,
+        "understudy": understudy, "unparsed": unparsed,
+        "interventions": interventions, "mock_runs": mock_runs,
+        "live_pct": round(100.0 * live / decisions, 1) if decisions else None,
+    }
     return out
 
 
@@ -263,6 +314,68 @@ def render(town, r, version):
         f'<tr><td>{esc(k)}</td><td class="num">${v:,.2f}</td></tr>'
         for k, v in sorted(r["tills"].items(), key=lambda kv: -kv[1]))
 
+    # ---- provenance. The section that decides whether the rest is real.
+    ig = r.get("integrity") or {}
+    pct = ig.get("live_pct")
+    if not ig.get("runs"):
+        prov_tone, prov_badge, prov_verdict = "warn", "no ledger", (
+            "No experiment ledger was found for this town. Nothing here can "
+            "be verified as having come from a language model — it may all "
+            "be true, but this file cannot tell you so.")
+    elif ig.get("mock_runs") == ig.get("runs") and not ig.get("live"):
+        prov_tone, prov_badge, prov_verdict = "warn", "mock run", (
+            "This town ran in mock mode. Every decision below was made by "
+            "the built-in script, not by a model. It is a rehearsal.")
+    elif pct is not None and pct >= 99.0 and not ig.get("understudy"):
+        prov_tone, prov_badge, prov_verdict = "good", "100% live minds", (
+            "Every decision in this town was made by a language model. No "
+            "understudy ever took a seat.")
+    elif pct is not None and pct >= 90.0:
+        prov_tone, prov_badge, prov_verdict = "warn", f"{pct}% live minds", (
+            f"{100 - pct:.1f}% of decisions were made by the understudy — the "
+            f"built-in script that stands in when a model is unreachable. "
+            f"Those stretches are not findings.")
+    else:
+        prov_tone, prov_badge, prov_verdict = "crit", f"{pct}% live minds", (
+            f"Only {pct:.1f}% of decisions came from a model. Most of what "
+            f"happened here was a script. Read it as fiction.")
+
+    # The banner line at the top of this file is a CLAIM. It is only allowed
+    # to make the strong one when the ledger backs it.
+    if prov_tone == "good":
+        lede_claim = ("Every villager below is a different language model. "
+                      "Nobody is playing them.")
+    elif prov_badge == "mock run":
+        lede_claim = ("Every villager below is a placeholder script — this "
+                      "town ran with its minds switched off.")
+    else:
+        lede_claim = ("Every villager below is meant to be a different "
+                      "language model; see the provenance section for how "
+                      "much of this run actually was.")
+
+    runrows = "".join(
+        f'<tr><td class="mono">{esc(run.get("run_id"))}</td>'
+        f'<td>{esc(run.get("code_version"))}</td>'
+        f'<td class="num">{esc(run.get("seed"))}</td>'
+        f'<td>Day {esc(run.get("opened_day"))}&ndash;'
+        f'{esc(run.get("closed_day", run.get("opened_day")))}</td>'
+        f'<td class="num">'
+        f'{(run.get("integrity") or {}).get("live_pct", "—")}</td>'
+        f'<td class="num">{len(run.get("interventions") or [])}</td>'
+        f'<td class="sub">{esc(run.get("ended_reason", "running"))}</td></tr>'
+        for run in r["runs"][-12:]) or \
+        '<tr><td colspan="7" class="muted">no runs recorded</td></tr>'
+
+    hands = []
+    for run in r["runs"]:
+        for i in (run.get("interventions") or []):
+            hands.append(i)
+    handrows = "".join(
+        f'<li class="m warn"><span class="when">Day {esc(i.get("day"))} '
+        f'tick {esc(i.get("tick"))}</span>'
+        f'<span class="what">{esc(i.get("kind"))}: {esc(i.get("detail"))}'
+        f'</span></li>' for i in hands[-25:])
+
     # the work-history table is the relief for the chart (contrast rule)
     workrows = "".join(
         f'<tr><td>Day {esc(d)}</td><td class="num">{n}</td></tr>'
@@ -311,6 +424,16 @@ li.m .when {{ flex:0 0 108px; font-size:12px; color:var(--ink3);
 li.m.crit {{ border-left-color:var(--crit); }}
 li.m.warn {{ border-left-color:var(--warn); }}
 li.m.good {{ border-left-color:var(--good); }}
+.verdict {{ padding:14px 16px; border-left:4px solid var(--line);
+  background:var(--surface); margin:0 0 14px; font-size:14px; }}
+.verdict b {{ display:block; font-size:11px; text-transform:uppercase;
+  letter-spacing:.08em; margin-bottom:5px; }}
+.verdict.good {{ border-left-color:var(--good); }}
+.verdict.good b {{ color:var(--good); }}
+.verdict.warn {{ border-left-color:var(--warn); }}
+.verdict.warn b {{ color:var(--warn); }}
+.verdict.crit {{ border-left-color:var(--crit); }}
+.verdict.crit b {{ color:var(--crit); }}
 .dot {{ display:inline-block; width:9px; height:9px; border-radius:50%;
   margin-right:8px; vertical-align:middle; }}
 .dot.crit {{ background:var(--crit); }} .dot.warn {{ background:var(--warn); }}
@@ -328,8 +451,7 @@ rect {{ transition: opacity .12s; }} rect:hover {{ opacity:.75; }}
 
 <h1>{esc(town)}</h1>
 <p class="lede">Day {esc(r["day"])} · tick {esc(r["tick"])} · seed
-{esc(r["seed"])} · {esc(r["events_total"])} recorded events. Every villager
-below is a different language model. Nobody is playing them.</p>
+{esc(r["seed"])} · {esc(r["events_total"])} recorded events. {lede_claim}</p>
 
 <div class="tiles">
   <div class="tile"><b>{len(r["cast"])}</b><span>villagers</span></div>
@@ -339,6 +461,27 @@ below is a different language model. Nobody is playing them.</p>
   <div class="tile"><b>${r["tills"].get("the town fund", 0):,.0f}</b><span>town fund</span></div>
   <div class="tile"><b>{ratio:.1f}&times;</b><span>words per deed</span></div>
 </div>
+
+<h2>Was any of this real?</h2>
+<p class="sub">A town can run without its minds. When a model host is
+unreachable the built-in understudy takes the seat and the simulation carries
+on looking exactly the same — which is how ten days of this project's own
+history were once mistaken for something they were not. The ledger below is
+kept by the engine itself, so this question has an answer that is not a
+memory.</p>
+<div class="verdict {prov_tone}"><b>{esc(prov_badge)}</b>{esc(prov_verdict)}</div>
+<p class="sub">{ig.get("decisions", 0):,} decisions across
+{ig.get("runs", 0)} run(s) · {ig.get("live", 0):,} from a model ·
+{ig.get("understudy", 0):,} from the understudy ·
+{ig.get("unparsed", 0):,} unparsed · {ig.get("interventions", 0):,} human
+interventions.</p>
+<table><thead><tr><th>Run</th><th>Version</th><th>Seed</th><th>Days</th>
+<th>% live</th><th>Hands</th><th>Ended</th></tr></thead>
+<tbody>{runrows}</tbody></table>
+{f'<details><summary>Every time a human reached in ({len(hands)})</summary>'
+ f'<ul class="moments">{handrows}</ul></details>' if hands else
+ '<p class="sub">Nobody reached in. No possessions, no injected events, no '
+ 'hand on the scale.</p>'}
 
 <h2>Who lives here</h2>
 <table><thead><tr><th>Villager</th><th>Job</th><th>Mind</th><th>Money</th>
@@ -399,7 +542,7 @@ def main():
         except OSError:
             pass
 
-    r = build(state, events)
+    r = build(state, events, load_runs(args.data, state.get("world_id")))
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(render(town, r, version))
     print(f"{args.out}: {town}, Day {r['day']} — {len(r['cast'])} villagers, "
