@@ -567,6 +567,8 @@ LEDGER_PATH = "data/experiments.json"
 # and at most every MAX_TICKS_BETWEEN_DECISIONS ticks regardless. This is
 # what makes a 5-model town feasible on one GPU.
 MAX_TICKS_BETWEEN_DECISIONS = 8
+POLICY_DECISION_TIMEOUT = 30.0  # wall-clock budget for one policy phase
+POLICY_MAX_WORKERS = 8          # concurrent policy calls outside world lock
 
 # Reflection: at this sim time each night, every agent summarizes its day
 # into a high-importance memory (Stanford-style).
