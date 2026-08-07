@@ -9,6 +9,7 @@ import re
 import threading
 
 import config
+from sim.causality import Command, CommandResult, DomainEvent
 from sim.ledger import Ledger
 from sim.store import TownStore, scrub_surrogates
 
@@ -129,6 +130,8 @@ class World:
         self.ledger = Ledger(self)
         self._events_lock = threading.Lock()
         self._event_seq = 0
+        self._command_seq = 0
+        self._active_command = None
         self._closed = False
         _OPEN_WORLDS.append(self)
 
@@ -661,7 +664,9 @@ class World:
         return self.ledger.is_money_promise(norm)
 
     # ------------------------------------------------------------- events
-    def emit(self, etype, agent, text, loc, target=None, deliver=True):
+    def emit(self, etype, agent, text, loc, target=None, deliver=True,
+             source=None, cause_event_id=None, command_id=None,
+             salience=None, thread_id=None, topic=None):
         """Record an event; queue it as a perception for co-located agents."""
         # Scrub half-characters at the door (v3.3.3). A villager typed a flag
         # emoji, one half of the surrogate pair survived into the transcript,
@@ -671,18 +676,35 @@ class World:
         text = scrub_surrogates(text)
         with self._events_lock:
             self._event_seq += 1
-            ev = {
-                "wid": self.world_id,
-                "seq": self._event_seq,
-                "tick": self.tick_no,
-                "day": self.clock.day,
-                "sim_time": self.clock.hhmm,
-                "type": etype,
-                "agent": agent,
-                "location": loc,
-                "target": target,
-                "text": text,
-            }
+            active = self._active_command
+            source = source or (active.source if active else
+                                ("villager" if agent else "world"))
+            cause_event_id = cause_event_id or (
+                active.cause_event_id if active else None)
+            command_id = command_id or (active.command_id if active else None)
+            salience = salience or (active.salience if active else "normal")
+            thread_id = thread_id or (active.thread_id if active else None)
+            if topic is None and active:
+                topic = active.topic or active.payload.get("action")
+            ev = DomainEvent(
+                wid=self.world_id,
+                seq=self._event_seq,
+                event_id=f"{self.world_id}:event:{self._event_seq}",
+                tick=self.tick_no,
+                day=self.clock.day,
+                sim_time=self.clock.hhmm,
+                type=etype,
+                agent=agent,
+                location=loc,
+                target=target,
+                text=text,
+                source=source,
+                cause_event_id=cause_event_id,
+                command_id=command_id,
+                salience=salience,
+                thread_id=thread_id,
+                topic=topic,
+            ).as_dict()
             who = f"{agent} -> {target}" if target else (agent or "WORLD")
             log_written = self.store.append_event_with_log(
                 ev, f"[{self.clock.label}] [{loc}] {etype.upper():8s} "
@@ -1508,6 +1530,55 @@ class World:
         agent.last_action = action
         handler = self._VERB_HANDLERS.get(act, World._verb_idle)
         return handler(self, agent, action)
+
+    def _next_command_id(self):
+        self._command_seq += 1
+        return f"{self.world_id}:command:{self._command_seq}"
+
+    def apply_command(self, command):
+        """Apply a typed action command at the world's physics boundary."""
+        if not isinstance(command, Command):
+            raise TypeError("command must be a Command")
+        if command.command_id is None:
+            command.command_id = self._next_command_id()
+        if command.kind != "action":
+            return CommandResult(False,
+                                 f"unknown command kind {command.kind!r}",
+                                 command.command_id)
+        if command.actor not in self.agents:
+            return CommandResult(False,
+                                 f"unknown actor {command.actor!r}",
+                                 command.command_id)
+        return self.apply_effect(
+            command,
+            lambda: self.execute(self.agents[command.actor], command.payload),
+        )
+
+    def apply_effect(self, command, effect):
+        """Run a validated effect and associate emitted events with it."""
+        if not isinstance(command, Command):
+            raise TypeError("command must be a Command")
+        if command.command_id is None:
+            command.command_id = self._next_command_id()
+        before = self._event_seq
+        previous = self._active_command
+        self._active_command = command
+        try:
+            outcome = effect()
+            if (isinstance(outcome, tuple) and len(outcome) == 2 and
+                    isinstance(outcome[0], bool)):
+                accepted, summary = outcome
+            else:
+                accepted, summary = True, outcome
+        finally:
+            self._active_command = previous
+        event_ids = [
+            event["event_id"] for event in self.events
+            if before < event.get("seq", 0) <= self._event_seq
+            and event.get("command_id") == command.command_id
+        ]
+        return CommandResult(bool(accepted), summary, command.command_id,
+                             event_ids)
 
     # ---------------------------------------------------------- resolvers
     def _resolve_location(self, agent, name):
