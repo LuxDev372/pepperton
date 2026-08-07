@@ -350,8 +350,15 @@ from a parallel world).
 ## Testing
 
 ```bash
-python tests/selftest.py     # 120+ behavioural regressions
+python tests/selftest.py     # 188 behavioural regressions
 python tests/goldenhash.py   # the fingerprint
+python tests/store.py        # the durable persistence boundary
+```
+
+Current baseline:
+
+```
+cbfef7f9b220c807f9d394020d5cd24b35de9b1658f50be562e92032d435270b
 ```
 
 `goldenhash.py` runs two seeded mock towns for 800 ticks each and hashes
@@ -359,6 +366,17 @@ every event plus the final economic state. A **pure refactor must leave
 that hash identical.** A feature is expected to move it — record the new
 value in the commit message so the next person has a baseline. Both
 scripts run in a scratch directory and will never touch a live town.
+
+**The harness does not read your `config.py`.** It installs a frozen world
+(`tests/goldenworld.py`) before the sim is imported, so the hash answers
+one question only: given the same world, did the CODE change behaviour?
+It used to import the live config, which quietly made "the hash is
+unmoved" a claim that held on one machine and nowhere else.
+
+The same rule binds `selftest.py`: **a test may force any config state it
+needs, and must never assert one it did not set.** Tests that read the
+operator's arming choices reported seven failures on a healthy town whose
+only sin was turning a feature on.
 
 One hard rule, learned by crashing three running towns: **every new
 config knob must have a code default.** A config file written before a
