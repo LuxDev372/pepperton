@@ -174,6 +174,7 @@ class Engine:
             world.absence_streaks = state.get("absence_streaks", {})
             world.work_streaks = state.get("work_streaks", {})
             world.turned_away_today = set(state.get("turned_away_today", []))
+            world.odd_jobs_today = set(state.get("odd_jobs_today", []))
             world.outside_flow = state.get("outside_flow", 0.0)
             world.last_foreclosure_day = state.get("last_foreclosure_day", 0)
             tf = state.get("townsfolk") or {}
@@ -307,6 +308,7 @@ class Engine:
             "absence_streaks": self.world.absence_streaks,
             "work_streaks": self.world.work_streaks,
             "turned_away_today": sorted(self.world.turned_away_today),
+            "odd_jobs_today": sorted(getattr(self.world, "odd_jobs_today", ())),
             "outside_flow": self.world.outside_flow,
             "last_foreclosure_day": self.world.last_foreclosure_day,
             "townsfolk": {
@@ -397,7 +399,9 @@ class Engine:
             if (agent.activity or {}).get("type") == "nap":
                 agent.needs["energy"] = min(100, agent.needs["energy"] + config.NAP_RECOVERY)
             if (agent.activity or {}).get("type") == "work":
-                self.world.pay_wage(agent, config.WAGE_PER_SHIFT_TICK)
+                # re-ask every tick, not just at hiring (v3.3.1)
+                if not self.world.shift_ended_by_insolvency(agent):
+                    self.world.pay_wage(agent, config.WAGE_PER_SHIFT_TICK)
             if (agent.activity or {}).get("type") == "build":
                 proj = self.world.find_project(agent.activity.get("project"))
                 if proj is None:
@@ -972,7 +976,7 @@ class Engine:
             "last_action": a.last_action,
             "last_prompt": a.last_prompt,
             "last_reply": a.last_reply,
-            "source": getattr(agent, "last_source", None),
+            "source": getattr(a, "last_source", None),
             "memory_count": self.memory.count(name),
             "recent_memories": self.memory.recent(name, 20),
             "debts_owed": self.world.open_debts(debtor=name),

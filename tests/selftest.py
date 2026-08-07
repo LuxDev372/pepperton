@@ -1416,8 +1416,14 @@ def _townsfolk():
               note[:70] if note else "")
         check("the odd job is taxed like any other wage",
               w.tills[config.TOWN_FUND] > fund0, "")
-        check("and it counts as having worked today",
-              idler.name in w.worked_today, "")
+        # v3.3.1 — THIS ASSERTION USED TO SAY THE OPPOSITE, and it was the
+        # bug. An odd job landing in worked_today let an employed villager
+        # stand in their own dark shop, take a townsperson's $5, and be
+        # posted as ON SHIFT with their Crane Bonus streak intact.
+        check("an odd job is EARNED work but is NOT a shift at your own door",
+              idler.name in w.odd_jobs_today
+              and idler.name not in w.worked_today,
+              "counted apart, so attendance cannot be laundered")
         check("an offer is taken once and once only",
               e.folk.offer_at(idler.location) is None, "")
 
@@ -1702,11 +1708,180 @@ def _an_old_town_upgrades():
         World.close_all()
     fresh_data()
 
+def _review_fixes_v331():
+    """The third external review. Three confirmed findings, all reproduced
+    before being fixed, all covered here so they cannot come back."""
+    fresh_data()
+
+    # ---- 1. THE INSPECTOR WAS COMPLETELY BROKEN ----------------------
+    # engine.py referenced an undefined `agent` instead of the local `a`, so
+    # EVERY call raised NameError. The headline feature of the whole project
+    # — "see any villager's memories and the exact prompt behind their last
+    # decision" — shipped with no regression test and did not work at all.
+    e = Engine(seed=7)
+    e.run_headless(6)
+    name = list(e.world.agents)[0]
+    try:
+        chart = e.inspect(name)
+        ok = isinstance(chart, dict) and "recent_memories" in chart
+    except Exception as exc:
+        chart, ok = None, False
+        check("the villager inspector does not crash", False, repr(exc)[:90])
+    if ok:
+        check("the villager inspector does not crash", True,
+              f"{len(chart)} fields for {name}")
+        check("and it carries the decision provenance it promises",
+              "source" in chart and "last_prompt" in chart
+              and "last_reason" in chart, "")
+    check("an unknown villager inspects to None, not an exception",
+          e.inspect("Nobody At All") is None, "")
+    World.close_all()
+    fresh_data()
+
+    # ---- 2. ODD-JOB ATTENDANCE LAUNDERING ----------------------------
+    # A shopkeeper standing in his own DARK shop could take a townsperson's
+    # $5 odd job and be posted ON SHIFT, absence streak reset, Crane Bonus
+    # streak intact, while his till never moved.
+    old, had_old = snapshot_knob("TOWNSFOLK")
+    try:
+        config.TOWNSFOLK = dict(old, enabled=True, count=6, shop_chance=0.0,
+                                move_chance=0.0, speak_chance=0.0,
+                                oddjob_chance=0.0, oddjob_pay=[6, 6])
+        e = Engine(seed=141)
+        w = e.world
+        shopkeep = next(a for a in w.agents.values()
+                        if a.workplace() and a.workplace() in w.tills)
+        shop = shopkeep.workplace()
+        shopkeep.asleep = False
+        shopkeep.location = shop            # standing in his OWN shop
+        till0 = w.tills.get(shop, 0.0)
+        e.folk.offers[shop] = {"npc": "Big Pete", "pay": 6.0,
+                               "task": "shifting crates",
+                               "expires": w.tick_no + 50}
+        ok, _ = w.execute(shopkeep, {"action": "work"})
+        check("a shopkeeper CAN take an odd job in his own doorway", ok, "")
+        check("...but it does not open his shop",
+              round(w.tills.get(shop, 0.0), 2) == round(till0, 2),
+              f"till still ${w.tills.get(shop, 0.0):.2f}")
+        check("...and it does NOT count as showing up for his shift",
+              shopkeep.name not in w.worked_today
+              and shopkeep.name in w.odd_jobs_today, "")
+
+        w.clock.day = 3
+        w._attendance_day_done = 2
+        w.attendance_ledger()
+        posted = [ev for ev in w.events
+                  if "ATTENDANCE LEDGER" in str(ev.get("text", ""))]
+        text = str(posted[-1]["text"]) if posted else ""
+        check("the evening ledger reports it honestly, by name",
+              "EARNED ELSEWHERE" in text
+              and shopkeep.name.split()[0] in text, text[:70])
+        check("and his absence streak counts the day his door stayed shut",
+              w.absence_streaks.get(shopkeep.name, 0) >= 1,
+              f"streak {w.absence_streaks.get(shopkeep.name, 0)}")
+    finally:
+        restore_knob("TOWNSFOLK", old, had_old)
+    World.close_all()
+    fresh_data()
+
+    # ---- 3. THE INSOLVENCY GATE'S UNDERLYING MECHANISM ---------------
+    # v2.9.2 fixed the reported repro; a stress test found the mechanism
+    # still live. ANY momentary deposit into the town fund reopened public
+    # hiring on a catastrophically insolvent payroll, and the shift then
+    # locked in for sixteen unchecked ticks.
+    e = Engine(seed=203)
+    w = e.world
+    fund = config.TOWN_FUND
+    public = next((a for a in w.agents.values()
+                   if a.workplace() and w._wage_till_key(a) == fund), None)
+    if public is None:
+        check("a public worker exists to test the payroll gate", False, "")
+    else:
+        w.debts.append({"debtor": fund, "creditor": public.name,
+                        "amount": config.WAGE_DEBT_CAP * 10, "status": "open",
+                        "kind": "wages", "day": w.clock.day, "due_day": None,
+                        "seq": 9001})
+        w.tills[fund] = 0.0
+        check("a catastrophically indebted payroll reads as insolvent",
+              w.insolvent(fund), f"owes ${w.wage_debt_of(fund):.0f}")
+
+        # the exact stress-test scenario: a dollar lands mid-tick
+        w.tills[fund] = config.WAGE_PER_SHIFT_TICK + 1
+        check("A DOLLAR PASSING THROUGH IS NOT SOLVENCY",
+              w.insolvent(fund),
+              f"${w.tills[fund]:.0f} in hand against "
+              f"${w.wage_debt_of(fund):.0f} owed")
+        public.asleep = False
+        public.location = public.workplace()
+        ok, note = w.execute(public, {"action": "work"})
+        check("...so the door does not reopen on it",
+              not ok or (public.activity or {}).get("type") != "work",
+              (note or "")[:60])
+
+        # covering what you owe IS solvency
+        w.tills[fund] = config.WAGE_DEBT_CAP * 10 + 5
+        check("but cash that genuinely covers the arrears is solvency",
+              not w.insolvent(fund), "")
+
+        # and a shift already running gets re-checked every tick
+        w.tills[fund] = 0.0
+        public.activity = {"type": "work", "until_tick": w.tick_no + 16,
+                           "note": ""}
+        ended = w.shift_ended_by_insolvency(public)
+        check("a running shift is re-checked, not locked in for 16 ticks",
+              ended and (public.activity or {}).get("type") == "idle",
+              "sent home mid-shift")
+
+        # a SHOP with a dry till must still be able to open and hope
+        shopkeep = next((a for a in w.agents.values()
+                         if a.workplace() and w._wage_till_key(a) != fund),
+                        None)
+        if shopkeep:
+            shopkeep.activity = {"type": "work",
+                                 "until_tick": w.tick_no + 16, "note": ""}
+            w.tills[shopkeep.workplace()] = 0.0
+            check("THE TIBBS DOOR SURVIVES — a dry shop stays open",
+                  not w.shift_ended_by_insolvency(shopkeep), "")
+    World.close_all()
+    fresh_data()
+
+    # ---- 4. A CONFIG KNOB THAT SILENTLY REFUSED TO APPLY -------------
+    # Townsfolk.ensure() bailed on self._seeded, which is restored from
+    # save — so raising the count on an existing town did nothing at all,
+    # with no error and no log line.
+    old, had_old = snapshot_knob("TOWNSFOLK")
+    try:
+        config.TOWNSFOLK = dict(old, enabled=True, count=3,
+                                shop_chance=0.0, move_chance=0.0,
+                                speak_chance=0.0, oddjob_chance=0.0)
+        e = Engine(seed=57)
+        e.folk.ensure()
+        first = [p["name"] for p in e.folk.people]
+        check("the street seeds to the configured count", len(first) == 3,
+              str(len(first)))
+        e.folk._seeded = True            # exactly what a restore sets
+        config.TOWNSFOLK = dict(config.TOWNSFOLK, count=6)
+        e.folk.ensure()
+        now = [p["name"] for p in e.folk.people]
+        check("RAISING the count on a restored town actually adds people",
+              len(now) == 6, f"{len(first)} -> {len(now)}")
+        check("and nobody is duplicated when it tops up",
+              len(set(now)) == len(now) and set(first) <= set(now), "")
+        config.TOWNSFOLK = dict(config.TOWNSFOLK, count=2)
+        e.folk.ensure()
+        check("lowering it does not delete anyone already walking around",
+              len(e.folk.people) == 6, "")
+    finally:
+        restore_knob("TOWNSFOLK", old, had_old)
+    World.close_all()
+    fresh_data()
+
 _townsfolk()
 _no_charity_from_the_gods()
 _town_report()
 _experiment_ledger()
 _an_old_town_upgrades()
+_review_fixes_v331()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)

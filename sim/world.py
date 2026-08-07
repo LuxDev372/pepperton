@@ -109,6 +109,12 @@ class World:
         self.absence_streaks = {}
         self.work_streaks = {}      # the Crane Bonus: absence's mirror
         self.turned_away_today = set()   # showed up; the town couldn't pay
+        # Took a townsperson's odd job. EARNED money, but did NOT open their
+        # own door — tracked apart from worked_today, because conflating the
+        # two let an employed villager launder a no-show into a perfect
+        # attendance record and a live Crane Bonus streak while their
+        # business stayed dark all day. (Found by review, v3.3.1.)
+        self.odd_jobs_today = set()
         # Net money created from outside the loop, ever. The bus is not the
         # only faucet — the Director's windfall conjures cash into a pocket
         # and a stranger steps off the coach with a wallet, while the heist
@@ -324,6 +330,7 @@ class World:
         self._bell_day_done = day
         self.worked_today = set()
         self.turned_away_today = set()
+        self.odd_jobs_today = set()
         self.earned_today = {}
         openings = (self.open_positions()
                     if getattr(config, "HIRING_ENABLED", True) else {})
@@ -375,7 +382,7 @@ class World:
         if self._attendance_day_done >= day:
             return
         self._attendance_day_done = day
-        showed, absent, refused = [], [], []
+        showed, absent, refused, oddjob = [], [], [], []
         for worker in self.agents.values():
             workplace = worker.workplace()
             if not workplace:
@@ -398,9 +405,18 @@ class World:
                 self.absence_streaks[worker.name] = \
                     self.absence_streaks.get(worker.name, 0) + 1
                 run = self.absence_streaks[worker.name]
-                absent.append(f"{workplace} — {worker.name.split()[0]} absent"
-                              + (f", day {run} running" if run > 1 else ""))
-        if not showed and not absent and not refused:
+                if worker.name in getattr(self, "odd_jobs_today", ()):
+                    # They worked. They earned. They did not open their own
+                    # door, and the town can see the difference — which is
+                    # the whole point of saying it out loud instead of
+                    # quietly filing it under 'absent'.
+                    oddjob.append(f"{workplace} — {worker.name.split()[0]} "
+                                  f"took paid work elsewhere instead"
+                                  + (f", day {run} running" if run > 1 else ""))
+                else:
+                    absent.append(f"{workplace} — {worker.name.split()[0]} absent"
+                                  + (f", day {run} running" if run > 1 else ""))
+        if not showed and not absent and not refused and not oddjob:
             return
         lines = []
         if showed:
@@ -408,6 +424,9 @@ class World:
         if refused:
             lines.append("TURNED AWAY (showed up, no work to give): "
                          + "; ".join(refused) + ".")
+        if oddjob:
+            lines.append("EARNED ELSEWHERE (paid work, own door shut): "
+                         + "; ".join(oddjob) + ".")
         if absent:
             lines.append("DOORS NEVER OPENED: " + "; ".join(absent) + ".")
         if getattr(config, "HIRING_ENABLED", True):
@@ -553,6 +572,66 @@ class World:
 
     def wage_debt_of(self, till_key):
         return self.ledger.wage_debt_of(till_key)
+
+    def insolvent(self, till_key):
+        """Can this employer stand behind the shift it is about to commit to?
+
+        v2.9.2 asked "is the till below one tick of wage", which a stress
+        test then took apart: ANY momentary deposit — rent from an unrelated
+        tenant, another worker's income-tax withholding, both of which land
+        mid-tick AFTER that tick's one-shot debt settlement has already run —
+        pushes the balance over the line for an instant and reopens hiring
+        on a fund that is catastrophically in arrears. The shift then locks
+        in for up to sixteen ticks. Measured by the reviewer: back wages
+        climbing 404 → 430 through one such gap. (Found by review, v3.3.1.)
+
+        A balance is a snapshot; a debt is a position. So ask the honest
+        question instead: is this employer past its arrears cap AND unable
+        to cover what it already owes? Cash that genuinely covers the back
+        wages is solvency — a dollar passing through on its way somewhere
+        else is not.
+        """
+        cap = getattr(config, "WAGE_DEBT_CAP", 40)
+        owed = self.wage_debt_of(till_key)
+        if owed < cap:
+            return False        # still inside its overdraft; hire and hope
+        return self.tills.get(till_key, 0.0) < owed
+
+    def shift_ended_by_insolvency(self, agent):
+        """Checked every paying tick, not just at hiring.
+
+        The gate above only ran when a shift STARTED, and a shift runs for
+        sixteen ticks. So one instant of apparent solvency bought sixteen
+        ticks of unchecked borrowing, and the wage debt booked on each of
+        those ticks never looked at the cap again.
+
+        Public payroll only. A SHOP with a dry till must always be able to
+        stay open and hope a customer walks in — that is the Tibbs Door, and
+        it is not what this is for. There is no door at the park for a
+        customer to walk through.
+        """
+        if not getattr(config, "ECONOMY", False):
+            return False
+        till_key = self._wage_till_key(agent)
+        if till_key != getattr(config, "TOWN_FUND", "the town fund"):
+            return False
+        if not self.insolvent(till_key):
+            return False
+        agent.activity = {"type": "idle", "until_tick": self.tick_no + 4,
+                          "note": "sent home mid-shift — the town ran dry"}
+        self.turned_away_today.add(agent.name)
+        self.emit("action", agent.name,
+                  f"was sent home part-way through the shift — the town "
+                  f"fund is ${self.wage_debt_of(till_key):.0f} behind on "
+                  f"wages and cannot stand behind another hour",
+                  agent.location)
+        agent.pending.append({
+            "text": ("You were sent home mid-shift. The town owes more in "
+                     "back wages than it holds. What you already worked "
+                     "today still stands on the books."),
+            "interrupt": True, "sim_time": self.clock.hhmm,
+        })
+        return True
 
     def settle_business_debts(self):
         self.ledger.settle_business_debts()
@@ -1261,7 +1340,17 @@ class World:
         if folk is not None and folk.offer_at(agent.location):
             ok, note = folk.take_offer(agent, agent.location)
             if ok:
-                self.worked_today.add(agent.name)
+                # NOT worked_today. An odd job is real, earned work and it
+                # counts as effort — but it is not a shift at your own
+                # workplace, and the attendance ledger reads worked_today as
+                # its only signal for "did this employed villager open their
+                # door". Writing here let a shopkeeper take a $5 job standing
+                # inside his own dark shop and be posted as ON SHIFT with his
+                # Crane Bonus streak intact. (Found by review, v3.3.1.)
+                #
+                # Nothing stops them doing both: the odd job spends this
+                # work action, their own shift is still there to take.
+                self.odd_jobs_today.add(agent.name)
                 return True, note
         wp = agent.workplace()
         if not wp and getattr(config, "HIRING_ENABLED", True):
@@ -1292,9 +1381,7 @@ class World:
             # the income tax on that payment handed straight back to it, so
             # it can never actually reach 0.00 and the old `<= 0` proxy read
             # the residue as solvency. (Found by review, v2.9.2.)
-            wage_tick = getattr(config, "WAGE_PER_SHIFT_TICK", 2)
-            dry = (self.tills.get(till_key, 0.0) < wage_tick and
-                   self.wage_debt_of(till_key) >= config.WAGE_DEBT_CAP)
+            dry = self.insolvent(till_key)
             # THE TIBBS DOOR (v2.9.1). Vera Tibbs of Pompeii showed up for
             # her shift at the Rusty Tap three times in one day — the third
             # time with five paying tourists standing in the plaza — and the

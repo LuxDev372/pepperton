@@ -100,8 +100,20 @@ class Townsfolk:
 
     # ------------------------------------------------------------- setup
     def ensure(self):
+        """Top the street up toward `count`. Idempotent, and it must stay
+        that way.
+
+        This used to bail on `self._seeded`, which is RESTORED FROM SAVE —
+        so raising TOWNSFOLK["count"] on an existing town silently did
+        nothing, forever, with no error and no log line. A config knob that
+        quietly refuses to apply is the same failure as an instrument that
+        lies. (Found by review, v3.3.1.)
+
+        Lowering the count does not delete anybody. People who are already
+        walking around keep walking around.
+        """
         c = cfg()
-        if self._seeded or not c["enabled"]:
+        if not c["enabled"]:
             return
         self._seeded = True
         world = self.world
@@ -125,7 +137,8 @@ class Townsfolk:
         # It was also a straight violation of this project's own rule —
         # watch before you build — committed four hours after writing it
         # down. Removed while still dark; she was never seen.
-        pool = list(_NAMES)
+        have = {p["name"] for p in self.people}
+        pool = [n for n in _NAMES if n[0] not in have]   # never a duplicate
         for _ in range(max(0, c["count"] - len(self.people))):
             if not pool:
                 break
