@@ -297,13 +297,19 @@ def _economy():
         return round(sum(x.money for x in w.agents.values())
                      + sum(w.tills.values()), 2)
     t0 = total()
-    bus0 = getattr(e.bus, "brought_in", 0.0)
+    # v3.3.2: net ALL outside money, not just the coach. world.outside_flow
+    # exists precisely because the bus is not the only faucet — armed
+    # townsfolk buy things and pay for odd jobs too. Subtracting only
+    # bus.brought_in made this test pass on a default config and fail on
+    # any town that had actually armed the Townsfolk. The SIM was right;
+    # the test was measuring the wrong total.
+    flow0 = getattr(w, "outside_flow", 0.0)
     e.run_headless(192)
     t1 = total()
     # v2.8: the loop is no longer sealed — the coach route carries money
     # in from outside. It must still BALANCE: every dollar in the town is
     # a dollar that was here before or a dollar a tourist spent.
-    t1 -= round(getattr(e.bus, "brought_in", 0.0) - bus0, 2)
+    t1 -= round(getattr(w, "outside_flow", 0.0) - flow0, 2)
     check("money is conserved (closed loop + audited bus inflow)",
           abs(t0 - t1) < 0.01,
           f"start ${t0} -> end ${t1}")
@@ -919,15 +925,26 @@ def _crane_bonus():
                   if a.workplace() and a.workplace() in w.tills)
     shop = worker.workplace()
 
-    # DARK by default: no multiplier, no streak accounting, no event
-    check("the Crane Bonus ships dark",
-          w.loyalty_cfg()["enabled"] is False and
-          w.wage_multiplier(worker.name) == 1.0 and
-          w.loyalty_steps(worker.name) == 0, "")
-    w.work_streaks[worker.name] = 99
-    check("a dark Act pays no raise even on a long run",
-          w.wage_multiplier(worker.name) == 1.0, "")
-    w.work_streaks = {}
+    # DARK: no multiplier, no streak accounting, no event.
+    #
+    # v3.3.2 — FORCED dark here instead of asserting the config says dark.
+    # Brad armed the Crane Bonus for window 2 and this started failing on
+    # his live town, which is the tell: it was asserting HIS CONFIGURATION
+    # rather than the code's behaviour. Same mistake as the golden hash
+    # importing config.py. A test may read code; it may not read choices.
+    _l, _had_l = snapshot_knob("LOYALTY")
+    config.LOYALTY = dict(_l, enabled=False)
+    try:
+        check("a dark Crane Bonus changes nothing at all",
+              w.loyalty_cfg()["enabled"] is False and
+              w.wage_multiplier(worker.name) == 1.0 and
+              w.loyalty_steps(worker.name) == 0, "")
+        w.work_streaks[worker.name] = 99
+        check("a dark Act pays no raise even on a long run",
+              w.wage_multiplier(worker.name) == 1.0, "")
+        w.work_streaks = {}
+    finally:
+        restore_knob("LOYALTY", _l, _had_l)
 
     # arm it
     old, had_old = snapshot_knob("LOYALTY")
@@ -1332,10 +1349,16 @@ def _townsfolk():
     e = Engine(seed=93)
     w = e.world
 
-    check("the townsfolk ship dark",
-          tfmod.cfg()["enabled"] is False and not e.folk.people, "")
-    e.folk.step()
-    check("a dark town has nobody in it", not e.folk.people, "")
+    # FORCED dark, for the same reason as the Crane Bonus above (v3.3.2).
+    _t, _had_t = snapshot_knob("TOWNSFOLK")
+    config.TOWNSFOLK = dict(_t, enabled=False)
+    try:
+        check("a dark street is empty", tfmod.cfg()["enabled"] is False
+              and not e.folk.people, "")
+        e.folk.step()
+        check("a dark town has nobody in it", not e.folk.people, "")
+    finally:
+        restore_knob("TOWNSFOLK", _t, _had_t)
 
     old, had_old = snapshot_knob("TOWNSFOLK")
     try:
@@ -1568,9 +1591,17 @@ def _experiment_ledger():
     check("it records the cast WITH their models and hosts",
           len(run["cast"]) == len(e.world.agents)
           and all(c["model"] for c in run["cast"]), "")
+    # v3.3.2: assert the ledger REPORTS REALITY, not that reality happens
+    # to be the default. This used to require townsfolk == False, so it
+    # failed on the very town that had armed them — a ledger test that
+    # only passes on an unarmed town is worse than no ledger test.
+    from sim import townsfolk as _tf
+    armed = run["laws_armed"]
     check("it records which optional laws were armed",
-          "foreclosure" in run["laws_armed"] and "bus" in run["laws_armed"]
-          and run["laws_armed"]["townsfolk"] is False, "")
+          "foreclosure" in armed and "bus" in armed
+          and armed["townsfolk"] == bool(_tf.cfg()["enabled"])
+          and armed["loyalty"] == bool(e.world.loyalty_cfg()["enabled"]),
+          f"townsfolk={armed['townsfolk']} loyalty={armed['loyalty']}")
 
     integ = e.exp.integrity()
     check("it counts every decision by who made it",
