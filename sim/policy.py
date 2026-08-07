@@ -162,6 +162,7 @@ class Decision:
     prompt: str = ""
     reply: str = ""
     source: str = "villager"
+    seat_revision: Optional[int] = None
 
     def __post_init__(self):
         if self.action is not None and not isinstance(self.action, FrozenDict):

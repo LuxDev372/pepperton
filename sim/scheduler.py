@@ -1,10 +1,65 @@
 """Bounded concurrent policy calls over immutable observations."""
 
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, wait
 from dataclasses import dataclass
+from queue import Empty, Queue
 import threading
 
 from sim.policy import Decision, Reflection
+
+
+class _DaemonExecutor:
+    """Small executor whose slow provider calls cannot block shutdown."""
+
+    def __init__(self, max_workers, thread_name_prefix):
+        self._queue = Queue()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._threads = []
+        for index in range(max_workers):
+            worker = threading.Thread(
+                target=self._worker, name=f"{thread_name_prefix}-{index}", daemon=True)
+            worker.start()
+            self._threads.append(worker)
+
+    def submit(self, fn, value):
+        future = Future()
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("scheduler is shut down")
+            self._queue.put((future, fn, value))
+        return future
+
+    def _worker(self):
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            future, fn, value = item
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(fn(value))
+            except BaseException as exc:
+                future.set_exception(exc)
+
+    def shutdown(self, wait=False, cancel_futures=True):
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if cancel_futures:
+                while True:
+                    try:
+                        future, _, _ = self._queue.get_nowait()
+                    except Empty:
+                        break
+                    future.cancel()
+            for _ in self._threads:
+                self._queue.put(None)
+        if wait:
+            for worker in self._threads:
+                worker.join()
 
 
 @dataclass(frozen=True)
@@ -39,7 +94,7 @@ class PolicyScheduler:
 
     def __init__(self, timeout, max_workers):
         self.timeout = max(0.0, float(timeout))
-        self._executor = ThreadPoolExecutor(
+        self._executor = _DaemonExecutor(
             max_workers=max(1, int(max_workers)),
             thread_name_prefix="pepperton-policy")
         self._lock = threading.Lock()
@@ -92,6 +147,10 @@ class PolicyScheduler:
             if future not in done:
                 detail = f"after {self.timeout:.3f}s"
                 outcomes[key] = PolicyOutcome(fallback("timeout", detail), "timeout", detail)
+                if future.cancel():
+                    with self._lock:
+                        if self._inflight.get(key) is future:
+                            del self._inflight[key]
                 continue
             try:
                 value = future.result()
@@ -110,25 +169,25 @@ class PolicyScheduler:
     def decide(self, tasks):
         jobs = []
         for task in tasks:
-            key = ("decide", task.agent_name)
+            key = task.agent_name
             future, status = self._submit(key, self._decide, task)
             jobs.append((key, future, task, status))
         def fallback(status, detail):
             return Decision({"action": "idle", "note": f"policy {status}: {detail}"},
                             reason=f"policy {status}; fallback idle")
         outcomes = self._collect(jobs, Decision, fallback)
-        return [outcomes[("decide", task.agent_name)] for task in tasks]
+        return [outcomes[task.agent_name] for task in tasks]
 
     def reflect(self, tasks):
         jobs = []
         for task in tasks:
-            key = ("reflect", task.agent_name)
+            key = task.agent_name
             future, status = self._submit(key, self._reflect, task)
             jobs.append((key, future, task, status))
         def fallback(status, detail):
             return Reflection(f"Policy {status}; the day remains unfinished: {detail}")
         outcomes = self._collect(jobs, Reflection, fallback)
-        return [outcomes[("reflect", task.agent_name)] for task in tasks]
+        return [outcomes[task.agent_name] for task in tasks]
 
     def close(self):
         with self._lock:

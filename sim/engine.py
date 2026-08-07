@@ -136,6 +136,7 @@ class Engine:
         self._command_results = []      # bounded results from queued commands
         self._thread = None
         self._reflected_day = 0
+        self._reflection_retry_day = None
         self._cached_snapshot = None    # rebuilt at the end of every tick
         self._inspect_cache = {}        # last full chart per villager
         if state:
@@ -216,6 +217,7 @@ class Engine:
             if bus_state.get("rng"):
                 self.bus.rng.setstate(_rng_load(bus_state["rng"]))
             self._reflected_day = state.get("reflected_day", 0)
+            self._reflection_retry_day = state.get("reflection_retry_day")
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
             # deterministic resume: restore every RNG mid-stream
@@ -304,6 +306,7 @@ class Engine:
             "projects": self.world.projects,
             "agents": agents,
             "reflected_day": self._reflected_day,
+            "reflection_retry_day": self._reflection_retry_day,
             "strangers_added": self.director.strangers_added,
             "radio_dead_day": self.radio.dead_day,
             "recent_says": [list(t) for t in self.world.recent_says],
@@ -623,11 +626,14 @@ class Engine:
             "policy", agent.name, f"policy {status}: {detail}", agent.location,
             deliver=False, source="scheduler", topic="policy")
 
-    def _decision_is_current(self, task, agent):
-        return (self.world.tick_no == task.tick_no and
+    def _decision_is_current(self, task, agent, decision):
+        if not (self.world.tick_no == task.tick_no and
                 agent.last_decision_tick == task.previous_decision_tick and
-                self._seat_state(task.brain) == task.seat_state and
-                self._mutation_seq == task.mutation_seq)
+                self._mutation_seq == task.mutation_seq):
+            return False
+        if decision.source == "possession" and decision.seat_revision is not None:
+            return self._seat_state(task.brain) == (True, decision.seat_revision)
+        return self._seat_state(task.brain) == task.seat_state
 
     def _apply_decisions(self, tasks, outcomes):
         """Apply proposed actions in prepared order while holding the lock."""
@@ -637,11 +643,16 @@ class Engine:
                 continue
             if outcome.status != "ok":
                 self._record_policy_outcome(agent, outcome.status, outcome.detail)
-            if not self._decision_is_current(task, agent):
+            decision = outcome.value
+            if not self._decision_is_current(task, agent, decision):
                 self._record_policy_outcome(agent, "stale", "decision discarded")
                 continue
-            decision = outcome.value
             action = decision.action
+            if decision.source == "possession" and decision.seat_revision is not None:
+                claim = getattr(task.brain, "claim_possession", None)
+                if claim and not claim(decision.seat_revision, action is not None):
+                    self._record_policy_outcome(agent, "stale", "decision discarded")
+                    continue
             agent.last_prompt = decision.prompt or "(mock brain — no prompt)"
             agent.last_reply = decision.reply or decision.raw
             agent.last_reason = decision.reason
@@ -663,21 +674,26 @@ class Engine:
 
     def _prepare_reflections(self, force=False):
         """Freeze nightly reflection inputs after today's actions land."""
-        if (force or self.world.clock.at(config.REFLECTION_TIME)) and \
+        retry_day = self._reflection_retry_day
+        if retry_day is not None and self._reflected_day < retry_day:
+            reflection_day = retry_day
+        elif (force or self.world.clock.at(config.REFLECTION_TIME)) and \
                 self._reflected_day < self.world.clock.day:
-            self._reflected_day = self.world.clock.day
-            tasks = []
-            for agent in self.world.agents.values():
-                agent.pantry = 3
-                day_mem = self.memory.day_memories(agent.name, self.world.clock.day)
-                tasks.append(ReflectionTask(
-                    agent_name=agent.name, brain=self.brains[agent.name],
-                    observation=make_observation(agent, self.world, [], day_mem),
-                    day=self.world.clock.day, mutation_seq=self._mutation_seq))
-            return tasks
-        return []
+            reflection_day = self.world.clock.day
+        else:
+            return []
+        tasks = []
+        for agent in self.world.agents.values():
+            agent.pantry = 3
+            day_mem = self.memory.day_memories(agent.name, reflection_day)
+            tasks.append(ReflectionTask(
+                agent_name=agent.name, brain=self.brains[agent.name],
+                observation=make_observation(agent, self.world, [], day_mem),
+                day=reflection_day, mutation_seq=self._mutation_seq))
+        return tasks
 
     def _apply_reflections(self, tasks, outcomes):
+        complete = True
         for task, outcome in zip(tasks, outcomes):
             agent = self.world.agents.get(task.agent_name)
             if agent is None:
@@ -686,6 +702,7 @@ class Engine:
                 self._record_policy_outcome(agent, outcome.status, outcome.detail)
             if self._mutation_seq != task.mutation_seq:
                 self._record_policy_outcome(agent, "stale", "reflection discarded")
+                complete = False
                 continue
             reflection = outcome.value
             self._remember(agent, "reflection", reflection.reflection,
@@ -711,6 +728,13 @@ class Engine:
                                 f"(a chapter closes: no longer '{old}' — "
                                 f"now: '{agent.goal}')",
                                 agent.location, deliver=False)
+        if tasks:
+            reflection_day = max(task.day for task in tasks)
+            if complete:
+                self._reflected_day = max(self._reflected_day, reflection_day)
+                self._reflection_retry_day = None
+            else:
+                self._reflection_retry_day = reflection_day
 
     # -------------------------------------------------------------- step
     def step(self):
