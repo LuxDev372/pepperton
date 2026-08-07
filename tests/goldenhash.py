@@ -35,7 +35,25 @@ sys.path.insert(0, ROOT)
 os.makedirs(SCRATCH, exist_ok=True)
 os.chdir(SCRATCH)
 
-import config
+# THE HARNESS DOES NOT READ YOUR CONFIG (v3.1.1).
+#
+# It used to. That made this hash a fingerprint of code PLUS the operator's
+# settings, so two people running identical code on different towns got
+# different answers and had no way to know that was expected. It cost Brad a
+# scare on 2026-08-07: he ran v3.1.0 against his own hundred-day Pepperton
+# config, got a hash nothing like the one in the release notes, and had every
+# reason to think the release had broken his town.
+#
+# tests/goldenworld.py is a frozen world, installed as `config` before sim is
+# imported. Now the hash answers only: given the same world, did the CODE
+# change behaviour? Which is the question it was always advertised to answer.
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location(
+    "config", os.path.join(ROOT, "tests", "goldenworld.py"))
+config = importlib.util.module_from_spec(_spec)
+sys.modules["config"] = config      # before sim imports it
+_spec.loader.exec_module(config)
 
 config.MOCK_MODE = True
 config.RADIO_ENABLED = False   # no network: the fingerprint must be hermetic

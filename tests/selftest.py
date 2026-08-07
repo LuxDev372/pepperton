@@ -33,6 +33,46 @@ def fresh_data():
     shutil.rmtree("data", ignore_errors=True)
     os.makedirs("data")
 
+# v2.4.1's law — "every knob must have a code default, and an old town's
+# config must boot untouched" — APPLIES TO THIS FILE TOO, and did not, until
+# v3.1.1. Brad ran v3.1.0's suite against his own hundred-day Pepperton
+# config and it died on line 207 with AttributeError: no INN_ROOM_COST. The
+# SIM was fine — every late knob is getattr'd in sim/. It was the test
+# enforcing the law that broke the law, which is the worst possible file for
+# it to happen in: the one thing standing between an old town and a bad
+# upgrade crashed instead of reporting.
+#
+# Defaults below MUST match the sim's own. If they drift, this file starts
+# testing a world nobody runs.
+LATE_KNOBS = {
+    "INN_ROOM_COST": 5,
+    "POOR_BOX": "the poor box",
+    "INCOME_TAX": 0.15,
+    "HIRING_ENABLED": True,
+    "CONDEMN_GRACE_DAYS": 3,
+    "FORECLOSURE": {},
+    "BUS": {},
+    "LOYALTY": {},
+    "TOWNSFOLK": {},
+}
+
+def knob(name):
+    return getattr(config, name, LATE_KNOBS[name])
+
+def snapshot_knob(name):
+    """(value, existed) — so a block can put the config back EXACTLY as it
+    found it, including absent. Restoring {} where there was nothing is
+    harmless today only because every cfg() merges over its own defaults;
+    it is still a lie about the config, and lies about the config are the
+    whole reason this section exists."""
+    return dict(knob(name)), hasattr(config, name)
+
+def restore_knob(name, value, existed):
+    if existed:
+        setattr(config, name, value)
+    elif hasattr(config, name):
+        delattr(config, name)
+
 results = []
 def check(name, ok, detail=""):
     results.append((name, ok, detail))
@@ -204,7 +244,7 @@ def _inn_and_taxes():
     ok, msg = w.execute(drifter, {"action": "rest"})
     check("inn beds shelter the homeless, fund the town",
           ok and drifter.asleep and
-          round(w.tills[config.TOWN_FUND] - fund1, 2) == config.INN_ROOM_COST,
+          round(w.tills[config.TOWN_FUND] - fund1, 2) == knob("INN_ROOM_COST"),
           msg[:60])
     fresh_data()
 
@@ -367,7 +407,7 @@ def _poor_box():
     w = e.world
     ags = list(w.agents.values())
     rich, broke = ags[0], ags[1]
-    box = config.POOR_BOX
+    box = knob("POOR_BOX")
 
     # donations land in the jar, publicly, from anywhere
     rich.money = 50
@@ -849,7 +889,7 @@ def _crane_bonus():
 
     # DARK by default: no multiplier, no streak accounting, no event
     check("the Crane Bonus ships dark",
-          config.LOYALTY["enabled"] is False and
+          w.loyalty_cfg()["enabled"] is False and
           w.wage_multiplier(worker.name) == 1.0 and
           w.loyalty_steps(worker.name) == 0, "")
     w.work_streaks[worker.name] = 99
@@ -858,7 +898,7 @@ def _crane_bonus():
     w.work_streaks = {}
 
     # arm it
-    old = dict(config.LOYALTY)
+    old, had_old = snapshot_knob("LOYALTY")
     try:
         config.LOYALTY = dict(old, enabled=True, streak_days=3,
                               raise_pct=0.25, max_steps=2,
@@ -920,7 +960,7 @@ def _crane_bonus():
         check("the worker is told the run is broken",
               any("broke your run" in p["text"] for p in worker.pending), "")
     finally:
-        config.LOYALTY = old
+        restore_knob("LOYALTY", old, had_old)
     fresh_data()
 
 _holt_act()
@@ -997,7 +1037,7 @@ def _review_fixes_v292():
 
     # 1. REFUSED IS NOT ABSENT. A public worker sent home for a broke town
     #    fund was being counted an absentee AND stripped of his Crane Bonus.
-    old = dict(config.LOYALTY)
+    old, had_old = snapshot_knob("LOYALTY")
     try:
         config.LOYALTY = dict(old, enabled=True, streak_days=3,
                               raise_pct=0.25, max_steps=2, milestone_bonus=5)
@@ -1032,7 +1072,7 @@ def _review_fixes_v292():
               public.name.split()[0] not in line.split("DOORS NEVER OPENED")[-1],
               line[:90])
     finally:
-        config.LOYALTY = old
+        restore_knob("LOYALTY", old, had_old)
     fresh_data()
 
     # 2. RENT LANDS BEFORE THE SWEEP: a trickle of fresh rent must not open
@@ -1261,11 +1301,11 @@ def _townsfolk():
     w = e.world
 
     check("the townsfolk ship dark",
-          config.TOWNSFOLK["enabled"] is False and not e.folk.people, "")
+          tfmod.cfg()["enabled"] is False and not e.folk.people, "")
     e.folk.step()
     check("a dark town has nobody in it", not e.folk.people, "")
 
-    old = dict(config.TOWNSFOLK)
+    old, had_old = snapshot_knob("TOWNSFOLK")
     try:
         config.TOWNSFOLK = dict(old, enabled=True, count=6,
                                 shop_chance=1.0, move_chance=0.0,
@@ -1357,7 +1397,7 @@ def _townsfolk():
         check("and they are NOT counted as minds",
               snap["vitals"]["minds"]["total"] == len(w.agents), "")
     finally:
-        config.TOWNSFOLK = old
+        restore_knob("TOWNSFOLK", old, had_old)
     fresh_data()
 
 def _no_charity_from_the_gods():
@@ -1525,10 +1565,59 @@ def _experiment_ledger():
           "60 ticks, purses, positions, needs and tills")
     fresh_data()
 
+def _an_old_town_upgrades():
+    """v3.1.1. THE ONE THAT WAS MISSING.
+
+    Brad upgraded a hundred-day Pepperton to v3.1.0 and the suite died on
+    AttributeError: config has no INN_ROOM_COST. The sim was fine — every
+    late knob is getattr'd in sim/. It was the TEST that assumed a knob
+    existed, which is the worst possible file for that bug, because the
+    suite is the only thing standing between an old town and a bad upgrade.
+    It crashed instead of reporting, and for a few minutes it looked like
+    the release had broken his town.
+
+    So: strip every knob added since v2.4 and drive the whole world. If a
+    line of this suite ever assumes a knob again, this fails first."""
+    stripped = []
+    for name in LATE_KNOBS:
+        if hasattr(config, name):
+            stripped.append((name, getattr(config, name)))
+            delattr(config, name)
+    try:
+        fresh_data()
+        e = Engine(seed=311)
+        w = e.world
+        w.clock.day = 6
+        for _ in range(80):
+            e.step()
+        w.morning_ledger(); w.morning_bell(); w.attendance_ledger()
+        e.save_state()
+        Engine(seed=311).load_state()
+        check("a town config written before any of this still runs",
+              True, f"{len(stripped)} knobs removed: "
+                    f"{', '.join(n for n, _ in stripped)}")
+        # and the test file's own helpers must survive the same treatment
+        check("and the suite reads every late knob through a code default",
+              knob("INN_ROOM_COST") == 5
+              and knob("POOR_BOX") == "the poor box"
+              and knob("LOYALTY") == {}, "")
+        check("the report still builds for a town with no modern knobs",
+              bool(__import__("tools.townreport", fromlist=["build"])
+                   .build({}, [])), "")
+    except Exception as exc:
+        check("a town config written before any of this still runs",
+              False, repr(exc)[:150])
+    finally:
+        for name, value in stripped:
+            setattr(config, name, value)
+        World.close_all()
+    fresh_data()
+
 _townsfolk()
 _no_charity_from_the_gods()
 _town_report()
 _experiment_ledger()
+_an_old_town_upgrades()
 fails2 = [r for r in results if not r[1]]
 print(f"\nTOTAL {len(results) - len(fails2)}/{len(results)} passed")
 sys.exit(1 if fails2 else 0)
