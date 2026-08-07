@@ -11,6 +11,7 @@ import threading
 import config
 from sim.causality import Command, CommandResult, DomainEvent
 from sim.ledger import Ledger
+from sim.social import Interaction, SPEECH_ACTS
 from sim.store import TownStore, scrub_surrogates
 
 
@@ -1055,6 +1056,39 @@ class World:
         self._detect_promise(agent, target, norm, text)
         return True, f"texted {target}: {text}"
 
+    def _verb_interact(self, agent, action):
+        """Open a bounded, co-located social scene through world physics."""
+        speech_act = str(action.get("act") or action.get("speech_act") or
+                         "request").strip().lower()
+        if speech_act not in SPEECH_ACTS - {"accept", "refuse", "counter", "defer", "leave"}:
+            return False, f"unsupported opening speech act {speech_act!r}"
+        target_name = self._resolve_agent(action.get("to") or action.get("target"))
+        target = self.agents.get(target_name)
+        if target is None or target.name == agent.name:
+            return False, "an interaction needs another named villager"
+        if target.asleep or target.location != agent.location:
+            return False, f"{target.name} is not available here for an interaction"
+        proposal = action.get("proposal") or {}
+        if not isinstance(proposal, dict):
+            return False, "proposal must be an object"
+        self._social_seq += 1
+        scene_id = f"{self.world_id}:scene:{self._social_seq}"
+        topic = str(action.get("topic") or "general").strip() or "general"
+        interaction = Interaction(
+            id=scene_id, initiator=agent.name, target=target.name,
+            location=agent.location, topic=topic, speech_act=speech_act,
+            proposal=dict(proposal), thread_id=action.get("thread_id"),
+            created_tick=self.tick_no, updated_tick=self.tick_no)
+        self.interactions[scene_id] = interaction
+        event = self.emit(
+            "interaction", agent.name,
+            f"opened a {speech_act} interaction with {target.name} about {topic}",
+            agent.location, target=target.name, topic=topic,
+            thread_id=interaction.thread_id)
+        interaction.source_event_id = event["event_id"]
+        interaction.last_event_id = event["event_id"]
+        return True, f"opened {speech_act} interaction {scene_id}"
+
 
     def _verb_eat(self, agent, action):
         if agent.needs["fullness"] >= 85:
@@ -1642,6 +1676,7 @@ class World:
 
     _VERB_HANDLERS = {
         "move": _verb_move, "say": _verb_say, "text": _verb_text,
+        "interact": _verb_interact,
         "eat": _verb_eat, "build": _verb_build, "propose": _verb_propose,
         "treat": _verb_treat, "drink": _verb_drink, "pay": _verb_pay,
         "borrow": _verb_borrow, "work": _verb_work, "rest": _verb_rest,
