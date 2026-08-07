@@ -8,9 +8,12 @@ import config
 from sim import brains
 from sim.agents import generate_cast
 from sim.bus import BusRoute
+from sim.causality import Command, CommandResult
 from sim.director import Director
 from sim.experiment import ExperimentLedger
+from sim.policy import make_observation
 from sim.radio import Radio
+from sim.scheduler import DecisionTask, PolicyScheduler, ReflectionTask
 from sim.store import TownStore
 from sim.townsfolk import Townsfolk
 from sim.world import World
@@ -111,6 +114,9 @@ class Engine:
         self.world.engine = self   # backref: the ledger writes memories
         self.memory = self.store.memory
         self.brains = {a.name: brains.build_brain(a, self.seed) for a in cast}
+        self.scheduler = PolicyScheduler(
+            getattr(config, "POLICY_DECISION_TIMEOUT", 30.0),
+            getattr(config, "POLICY_MAX_WORKERS", 8))
         self.radio = Radio(self.seed)
         self.director = Director(self, self.seed)
         self.bus = BusRoute(self.world, random.Random(f"bus:{self.seed}"))
@@ -122,11 +128,15 @@ class Engine:
         self.running = False
         self._stop_event = threading.Event()
         self.lock = threading.RLock()   # guards world/brains vs API threads
+        self._step_lock = threading.Lock()  # exactly one simulation tick at a time
+        self._mutation_seq = 0            # invalidates in-flight policy work
         self._cmdq = []                 # API writes, applied between ticks
         self._cmdlock = threading.Lock()   # guards _cmdq only — never held
                                            # while a model is thinking
+        self._command_results = []      # bounded results from queued commands
         self._thread = None
         self._reflected_day = 0
+        self._reflection_retry_day = None
         self._cached_snapshot = None    # rebuilt at the end of every tick
         self._inspect_cache = {}        # last full chart per villager
         if state:
@@ -148,6 +158,7 @@ class Engine:
                 world.events = evs
             world._event_seq = state.get(
                 "event_seq", max((e.get("seq", 0) for e in evs), default=0))
+            world._command_seq = state.get("command_seq", 0)
             world.tick_no = state["tick_no"]
             world.clock.day = state["day"]
             world.clock.minutes = state["minutes"]
@@ -206,6 +217,7 @@ class Engine:
             if bus_state.get("rng"):
                 self.bus.rng.setstate(_rng_load(bus_state["rng"]))
             self._reflected_day = state.get("reflected_day", 0)
+            self._reflection_retry_day = state.get("reflection_retry_day")
             self.director.strangers_added = state.get("strangers_added", 0)
             self.radio.dead_day = state.get("radio_dead_day")
             # deterministic resume: restore every RNG mid-stream
@@ -286,6 +298,7 @@ class Engine:
             },
             "tick_no": self.world.tick_no,
             "event_seq": self.world._event_seq,
+            "command_seq": self.world._command_seq,
             "memory_seq": self.memory.high_watermark(),
             "day": self.world.clock.day,
             "minutes": self.world.clock.minutes,
@@ -293,6 +306,7 @@ class Engine:
             "projects": self.world.projects,
             "agents": agents,
             "reflected_day": self._reflected_day,
+            "reflection_retry_day": self._reflection_retry_day,
             "strangers_added": self.director.strangers_added,
             "radio_dead_day": self.radio.dead_day,
             "recent_says": [list(t) for t in self.world.recent_says],
@@ -543,8 +557,14 @@ class Engine:
             agent.activity = None
             self.world.emit("action", agent.name, "woke up", agent.location, deliver=False)
 
-    # -------------------------------------------------------------- step
-    def step(self):
+    # -------------------------------------------------------------- scheduling
+    @staticmethod
+    def _seat_state(brain):
+        state = getattr(brain, "decision_state", None)
+        return state() if state else None
+
+    def _prepare_tick(self):
+        """Advance deterministic state and freeze policy inputs under lock."""
         if self.exp.run is None:
             self.exp.open_run(self, restored=self.world.tick_no > 0)
         self.world.tick_no += 1
@@ -575,6 +595,7 @@ class Engine:
 
         order = list(self.world.agents.values())
         self.rng.shuffle(order)
+        tasks = []
         for agent in order:
             act = agent.activity
             if act and act.get("until_tick") is not None and \
@@ -591,11 +612,57 @@ class Engine:
                 f"{agent.location} {agent.goal}"
             memories = self.memory.retrieve(agent.name, query, self.world.tick_no)
             brain = self.brains[agent.name]
-            action, raw, reason = brain.decide(agent, self.world, perceptions, memories)
-            agent.last_reason = reason
+            tasks.append(DecisionTask(
+                agent_name=agent.name, brain=brain,
+                observation=make_observation(agent, self.world, perceptions, memories),
+                tick_no=self.world.tick_no,
+                previous_decision_tick=agent.last_decision_tick,
+                seat_state=self._seat_state(brain),
+                mutation_seq=self._mutation_seq))
+        return tasks
+
+    def _record_policy_outcome(self, agent, status, detail):
+        self.world.emit(
+            "policy", agent.name, f"policy {status}: {detail}", agent.location,
+            deliver=False, source="scheduler", topic="policy")
+
+    def _decision_is_current(self, task, agent, decision):
+        if not (self.world.tick_no == task.tick_no and
+                agent.last_decision_tick == task.previous_decision_tick and
+                self._mutation_seq == task.mutation_seq):
+            return False
+        if decision.source == "possession" and decision.seat_revision is not None:
+            return self._seat_state(task.brain) == (True, decision.seat_revision)
+        return self._seat_state(task.brain) == task.seat_state
+
+    def _apply_decisions(self, tasks, outcomes):
+        """Apply proposed actions in prepared order while holding the lock."""
+        for task, outcome in zip(tasks, outcomes):
+            agent = self.world.agents.get(task.agent_name)
+            if agent is None:
+                continue
+            if outcome.status != "ok":
+                self._record_policy_outcome(agent, outcome.status, outcome.detail)
+            decision = outcome.value
+            if not self._decision_is_current(task, agent, decision):
+                self._record_policy_outcome(agent, "stale", "decision discarded")
+                continue
+            action = decision.action
+            if decision.source == "possession" and decision.seat_revision is not None:
+                claim = getattr(task.brain, "claim_possession", None)
+                if claim and not claim(decision.seat_revision, action is not None):
+                    self._record_policy_outcome(agent, "stale", "decision discarded")
+                    continue
+            agent.last_prompt = decision.prompt or "(mock brain — no prompt)"
+            agent.last_reply = decision.reply or decision.raw
+            agent.last_reason = decision.reason
             agent.last_decision_tick = self.world.tick_no
-            self._record_provenance(agent, reason)
-            ok, summary = self.world.execute(agent, action)
+            self._record_provenance(agent, decision.reason)
+            result = self.world.apply_command(Command(
+                kind="action", source=decision.source or "villager", actor=agent.name,
+                payload=action or {},
+            ))
+            ok, summary = result.accepted, result.summary
             if (action or {}).get("action") in ("say", "text"):
                 agent.talk_streak += 1
             else:
@@ -603,36 +670,53 @@ class Engine:
             kind = "speech" if (action or {}).get("action") == "say" else "action"
             imp = _IMPORTANCE["own_speech"] if kind == "speech" else _IMPORTANCE["own_action"]
             self._remember(agent, kind, f"I {summary}", imp if ok else imp + 1)
+        return self._prepare_reflections()
 
-        # nightly reflection: diary + self-judged warmth + goal arcs
-        if self.world.clock.at(config.REFLECTION_TIME) and \
+    def _prepare_reflections(self, force=False):
+        """Freeze nightly reflection inputs after today's actions land."""
+        retry_day = self._reflection_retry_day
+        if retry_day is not None and self._reflected_day < retry_day:
+            reflection_day = retry_day
+        elif (force or self.world.clock.at(config.REFLECTION_TIME)) and \
                 self._reflected_day < self.world.clock.day:
-            self._reflected_day = self.world.clock.day
-            self._nightly_reflections()
-
-        # refresh the observatory's lock-free snapshot (see snapshot())
-        self._cached_snapshot = self._snapshot_locked(0)
-
-    def _nightly_reflections(self):
+            reflection_day = self.world.clock.day
+        else:
+            return []
+        tasks = []
         for agent in self.world.agents.values():
-            agent.pantry = 3    # overnight restock
-            day_mem = self.memory.day_memories(agent.name, self.world.clock.day)
-            r = self.brains[agent.name].reflect(agent, self.world.clock.day, day_mem)
-            if isinstance(r, str):   # legacy brain
-                r = {"reflection": r, "warmer": None, "colder": None,
-                     "goal_resolved": False}
-            self._remember(agent, "reflection", r["reflection"],
+            agent.pantry = 3
+            day_mem = self.memory.day_memories(agent.name, reflection_day)
+            tasks.append(ReflectionTask(
+                agent_name=agent.name, brain=self.brains[agent.name],
+                observation=make_observation(agent, self.world, [], day_mem),
+                day=reflection_day, mutation_seq=self._mutation_seq))
+        return tasks
+
+    def _apply_reflections(self, tasks, outcomes):
+        complete = True
+        for task, outcome in zip(tasks, outcomes):
+            agent = self.world.agents.get(task.agent_name)
+            if agent is None:
+                continue
+            if outcome.status != "ok":
+                self._record_policy_outcome(agent, outcome.status, outcome.detail)
+            if self._mutation_seq != task.mutation_seq:
+                self._record_policy_outcome(agent, "stale", "reflection discarded")
+                complete = False
+                continue
+            reflection = outcome.value
+            self._remember(agent, "reflection", reflection.reflection,
                            _IMPORTANCE["reflection"])
-            self.world.emit("reflect", agent.name, r["reflection"],
+            self.world.emit("reflect", agent.name, reflection.reflection,
                             agent.location, deliver=False)
             # valence: the villager's own nightly judgment moves the needle
-            for key, delta in (("warmer", 3), ("colder", -3)):
-                who = self.world._resolve_agent(r.get(key))
+            for who_name, delta in ((reflection.warmer, 3), (reflection.colder, -3)):
+                who = self.world._resolve_agent(who_name)
                 if who and who != agent.name:
                     agent.relationships[who] = \
                         agent.relationships.get(who, 0) + delta
             # goal arcs: closure, then a fresh preoccupation
-            if r.get("goal_resolved"):
+            if reflection.goal_resolved:
                 old = agent.goal
                 pool = [g for g in config.GOALS if g != old]
                 agent.goal = self.rng.choice(pool)
@@ -644,6 +728,27 @@ class Engine:
                                 f"(a chapter closes: no longer '{old}' — "
                                 f"now: '{agent.goal}')",
                                 agent.location, deliver=False)
+        if tasks:
+            reflection_day = max(task.day for task in tasks)
+            if complete:
+                self._reflected_day = max(self._reflected_day, reflection_day)
+                self._reflection_retry_day = None
+            else:
+                self._reflection_retry_day = reflection_day
+
+    # -------------------------------------------------------------- step
+    def step(self):
+        with self._step_lock:
+            # Policy calls run only after the immutable inputs are frozen.
+            with self.lock:
+                tasks = self._prepare_tick()
+            outcomes = self.scheduler.decide(tasks)
+            with self.lock:
+                reflection_tasks = self._apply_decisions(tasks, outcomes)
+            reflection_outcomes = self.scheduler.reflect(reflection_tasks)
+            with self.lock:
+                self._apply_reflections(reflection_tasks, reflection_outcomes)
+                self._cached_snapshot = self._snapshot_locked(0)
 
     # --------------------------------------------------------------- run
     def run_headless(self, ticks):
@@ -651,16 +756,56 @@ class Engine:
             self.step()
 
     # ----------------------------------------------------------- commands
-    def submit(self, fn, label=""):
-        """Queue a world mutation to run at the next tick boundary.
+    def dispatch(self, command):
+        """Apply a typed command at the current simulation boundary."""
+        with self.lock:
+            self._mutation_seq += 1
+            if command.kind == "director.event":
+                return self.world.apply_effect(
+                    command, lambda: self.director.apply_command(command))
+            if command.kind == "recast":
+                return self.world.apply_effect(
+                    command, lambda: self._apply_recast(command))
+            return self.world.apply_command(command)
+
+    def _apply_recast(self, command):
+        """Swap a villager's model inside the causal command boundary."""
+        from sim.brains import LLMBrain, MockBrain, providers
+
+        requested = command.payload.get("agent", "")
+        resolved = self.world._resolve_agent(requested)
+        if not resolved:
+            return False, f"no villager matching {requested!r}"
+        model = command.payload.get("model")
+        if not model:
+            return False, "need a model tag"
+        host = command.payload.get("host", "default")
+        if host not in providers():
+            return False, f"unknown provider key {host!r}"
+
+        core = LLMBrain(model, host)
+        core.understudy = MockBrain(resolved, self.seed)
+        self.brains[resolved].understudy = core
+        agent = self.world.agents[resolved]
+        agent.model, agent.host = model, host
+        self.world.emit(
+            "world", None,
+            f"(something subtle changes behind {resolved}'s eyes)",
+            agent.location, deliver=False, topic="recast")
+        return True, f"recast {resolved} -> {model}"
+
+    def submit(self, command_or_fn, label=""):
+        """Queue a typed command or legacy callable at the next tick boundary.
 
         API threads must not take engine.lock themselves: in live mode a
         tick holds it while five models think, so a Director click could
         block an HTTP request for the full model timeout (measured at 107s
         on a busy GPU). Writes are queued and applied between ticks — the
         same contract possession already uses for queued actions."""
+        if not isinstance(command_or_fn, Command) and not callable(command_or_fn):
+            raise TypeError("queued item must be a Command or callable")
         with self._cmdlock:
-            self._cmdq.append((fn, label))
+            self._cmdq.append((command_or_fn, label))
 
     def _drain_commands(self):
         import traceback
@@ -669,14 +814,19 @@ class Engine:
         if not pending:
             return
         with self.lock:
-            for fn, label in pending:
+            for queued, label in pending:
                 # every /api write in the system funnels through here with
                 # a label. An experiment with an unrecorded intervention in
                 # it is not an experiment.
                 self.exp.note_intervention(
                     "api", label, self.world.tick_no, self.world.clock.day)
                 try:
-                    fn()
+                    result = (self.dispatch(queued)
+                              if isinstance(queued, Command) else queued())
+                    if isinstance(result, CommandResult):
+                        self._command_results.append(result)
+                        if len(self._command_results) > 100:
+                            self._command_results = self._command_results[-100:]
                 except Exception:
                     print(f"[ENGINE] queued command {label!r} failed "
                           f"(town continues):", flush=True)
@@ -694,8 +844,7 @@ class Engine:
             while self.running:
                 if not self.paused:
                     try:
-                        with self.lock:
-                            self.step()
+                        self.step()
                     except (OSError, sqlite3.Error):
                         self.running = False
                         print(f"[ENGINE] fatal persistence failure at tick "
@@ -736,6 +885,7 @@ class Engine:
             thread.join()
         # books closed AFTER the last tick lands and BEFORE the handles go
         self.exp.close(self, "stopped")
+        self.scheduler.close()
         self.world.close()
 
     # ------------------------------------------------------------- state
