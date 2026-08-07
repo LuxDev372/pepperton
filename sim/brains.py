@@ -16,11 +16,13 @@ Three species:
 
 import os
 import random
+import threading
 
 import requests
 
 import config
 from sim import prompts
+from sim.policy import Decision
 
 
 # ------------------------------------------------------------- providers
@@ -154,28 +156,26 @@ class LLMBrain(BrainBase):
     def decide(self, agent, world, perceptions, memories):
         system = prompts.system_prompt(agent, world)
         user = prompts.decision_prompt(agent, world, perceptions, memories)
-        agent.last_prompt = system + "\n\n---\n\n" + user
+        prompt = system + "\n\n---\n\n" + user
         try:
             raw = self._chat(system, user)
         except requests.RequestException as e:
-            agent.last_reply = f"({self.host_key}/{self.model} error: {e})"
+            reply = f"({self.host_key}/{self.model} error: {e})"
             if self.understudy:
                 action, _, reason = self.understudy.decide(agent, world, perceptions, memories)
-                return action, agent.last_reply, f"host unreachable; understudy acted: {reason}"
-            return {"action": "idle", "note": "stares into the middle distance"}, agent.last_reply, "host unreachable"
-        agent.last_reply = raw
+                return Decision(action, reply, f"host unreachable; understudy acted: {reason}",
+                                prompt=prompt, reply=reply)
+            return Decision({"action": "idle", "note": "stares into the middle distance"},
+                            reply, "host unreachable", prompt=prompt, reply=reply)
         action = prompts.parse_json_reply(raw)
         if not isinstance(action, dict) or "action" not in action:
-            return {"action": "idle", "note": "mutters something unintelligible"}, raw, "unparseable reply"
-        # a reply that quotes our own schema is not a decision (v3.8.3).
-        # The ACTION IS UNTOUCHED — the world does exactly what it did
-        # before, and the villager is not corrected, censored or nudged.
-        # Only the provenance changes, so a day containing it can no longer
-        # certify as 100% thought.
+            return Decision({"action": "idle", "note": "mutters something unintelligible"},
+                            raw, "unparseable reply", prompt=prompt, reply=raw)
         quoted = prompts.echoed_template(action)
         if quoted:
-            return action, raw, f"echoed the template {quoted}"
-        return action, raw, "model decision"
+            return Decision(action, raw, f"echoed the template {quoted}",
+                            prompt=prompt, reply=raw)
+        return Decision(action, raw, "model decision", prompt=prompt, reply=raw)
 
     def reflect(self, agent, day, day_memories):
         fallback = {"reflection": f"Another day. {agent.goal.capitalize()} — "
@@ -250,7 +250,6 @@ class MockBrain(BrainBase):
         )
 
     def decide(self, agent, world, perceptions, memories):
-        agent.last_prompt = "(mock brain — no prompt)"
         clock = world.clock
         urgent = agent.urgent_needs()
 
@@ -416,6 +415,25 @@ class ExternalBrain(BrainBase):
         self.queued_action = None
         self.possessed = False
         self.latest_observation = {}
+        self._seat_lock = threading.Lock()
+        self._seat_revision = 0
+
+    def set_possessed(self, possessed):
+        with self._seat_lock:
+            self.possessed = bool(possessed)
+            self._seat_revision += 1
+            if not self.possessed:
+                self.queued_action = None
+
+    def queue_action(self, action):
+        with self._seat_lock:
+            self.queued_action = action
+            self.possessed = True
+            self._seat_revision += 1
+
+    def decision_state(self):
+        with self._seat_lock:
+            return self.possessed, self._seat_revision
 
     def decide(self, agent, world, perceptions, memories):
         self.latest_observation = {
@@ -426,9 +444,14 @@ class ExternalBrain(BrainBase):
             "perceptions": [p["text"] for p in perceptions],
             "memories": [m["text"] for m in memories],
         }
-        if self.possessed and self.queued_action:
-            action, self.queued_action = self.queued_action, None
+        with self._seat_lock:
+            possessed = self.possessed
+            action = self.queued_action
+            self.queued_action = None
+        if possessed and action:
             return action, "(external)", "possessed: external action"
+        if possessed:
+            return None, "(external)", "possessed: waiting for external action"
         return self.understudy.decide(agent, world, perceptions, memories)
 
     def reflect(self, agent, day, day_memories):
