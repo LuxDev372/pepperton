@@ -62,5 +62,15 @@ deferred = engine.dispatch(Command(
     kind="action", source="test", actor=right.name,
     payload={"action": "interact", "act": "defer", "scene_id": second.id}))
 check("designated responder defers", opened.accepted and deferred.accepted and second.status == "deferred")
+third = engine.dispatch(Command(
+    kind="action", source="test", actor=left.name,
+    payload={"action": "interact", "to": right.name, "topic": "garden"}))
+third_scene = list(engine.world.interactions.values())[-1]
+countered = engine.dispatch(Command(
+    kind="action", source="test", actor=right.name,
+    payload={"action": "interact", "act": "counter", "scene_id": third_scene.id,
+             "proposal": {"work": "tomorrow"}}))
+check("counter hands the turn back", third.accepted and countered.accepted and
+      third_scene.status == "open" and third_scene.next_responder == left.name)
 engine.stop()
 print("Social-open proof complete")

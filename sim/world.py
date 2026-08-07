@@ -11,7 +11,7 @@ import threading
 import config
 from sim.causality import Command, CommandResult, DomainEvent
 from sim.ledger import Ledger
-from sim.social import Interaction, SPEECH_ACTS
+from sim.social import Interaction, MAX_INTERACTION_ROUNDS, SPEECH_ACTS
 from sim.store import TownStore, scrub_surrogates
 
 
@@ -1019,6 +1019,29 @@ class World:
                 thread_id=scene.thread_id)
             scene.last_event_id = event["event_id"]
             return True, f"{scene.status} the {scene.topic} interaction"
+        if speech_act == "counter":
+            scene = self.interactions.get(str(action.get("scene_id") or ""))
+            if scene is None or scene.status != "open":
+                return False, "there is no open interaction with that id"
+            if agent.name != scene.next_responder:
+                return False, "it is not this person's turn in the interaction"
+            proposal = action.get("proposal")
+            if not isinstance(proposal, dict) or not proposal:
+                return False, "a counter needs a non-empty proposal"
+            scene.proposal = dict(proposal)
+            scene.round += 1
+            scene.response_act = "counter"
+            scene.updated_tick = self.tick_no
+            scene.next_responder = scene.initiator if agent.name == scene.target else scene.target
+            if scene.round >= MAX_INTERACTION_ROUNDS:
+                scene.status, scene.next_responder = "closed", None
+            event = self.emit("interaction", agent.name,
+                f"countered {scene.initiator}'s {scene.topic} interaction",
+                scene.location, target=scene.initiator, topic=scene.topic,
+                thread_id=scene.thread_id)
+            scene.last_event_id = event["event_id"]
+            return True, ("closed the interaction after too many counters"
+                          if scene.status == "closed" else "countered the interaction")
         if speech_act not in SPEECH_ACTS - {"accept", "refuse", "counter", "defer", "leave"}:
             return False, f"unsupported opening speech act {speech_act!r}"
         target_name = self._resolve_agent(action.get("to") or action.get("target"))
