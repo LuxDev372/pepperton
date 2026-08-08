@@ -120,11 +120,61 @@ class ExperimentLedger:
         self.write()
 
     # ---------------------------------------------------------------- notes
-    def note_decision(self, source):
+    def note_decision(self, source, day=None):
+        """Count one decision by provenance — for the run, and FOR THE DAY.
+
+        PER-DAY PROVENANCE (v3.7). The run total was never enough. Window 2
+        closed at 99.8% live and the verdict was only readable because a
+        lucky Day 108 snapshot happened to exist and because all sixteen
+        failures happened to belong to one villager. Had it come back at
+        99.2% with the failures scattered, there would have been no way on
+        earth to say which days counted — and a pre-registered bar that
+        requires "a day certified 100% live" is unenforceable without this.
+
+        Flagged after Window 2. Flagged again on 8 Aug. It cost us three
+        separate times in one morning. It is the price of the next claim.
+        (claude/DAY131.md, claude/STATE.md)"""
         if not self.enabled or not self.run:
             return
         d = self.run["decisions"]
         d[source] = d.get(source, 0) + 1
+        if day is None:
+            return
+        by_day = self.run.setdefault("decisions_by_day", {})
+        row = by_day.setdefault(str(int(day)), {})
+        row[source] = row.get(source, 0) + 1
+
+    def day_integrity(self, day):
+        """What fraction of ONE day was actually thought, or None if that
+        day has no record. This is what a window verdict must cite."""
+        if not self.run:
+            return None
+        row = (self.run.get("decisions_by_day") or {}).get(str(int(day)))
+        if not row:
+            return None
+        total = sum(row.values())
+        live = row.get("model", 0) + row.get("possessed", 0)
+        understudy = row.get("understudy", 0) + row.get("dark", 0)
+        return {
+            "day": int(day),
+            "decisions": total,
+            "live": live,
+            "live_pct": round(100.0 * live / total, 1) if total else None,
+            "understudy": understudy,
+            "unparsed": row.get("unparsed", 0),
+            "clean": total > 0 and understudy == 0 and not row.get("unparsed"),
+        }
+
+    def clean_days(self):
+        """Every day of this run that was 100% live, in order. A window's
+        bar can only ever be met on one of these."""
+        by_day = (self.run or {}).get("decisions_by_day") or {}
+        out = []
+        for key in by_day:
+            row = self.day_integrity(key)
+            if row and row["clean"]:
+                out.append(row["day"])
+        return sorted(out)
 
     def note_director(self, name, manual, tick, day):
         if not self.enabled or not self.run:

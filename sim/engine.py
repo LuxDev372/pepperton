@@ -853,7 +853,7 @@ class Engine:
 
     def _record_provenance(self, agent, reason):
         src = self.decision_source(reason)
-        self.exp.note_decision(src)
+        self.exp.note_decision(src, day=self.world.clock.day)
         was = getattr(agent, "last_source", None)
         agent.last_source = src
         if was is not None and was != src:

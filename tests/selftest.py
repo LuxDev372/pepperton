@@ -710,6 +710,65 @@ def _keepsakes():
 
 _keepsakes()
 
+# ---- v3.7: per-day provenance. The price of the next claim. ----
+def _per_day_provenance():
+    fresh_data()
+    e = Engine(seed=61)
+    exp = e.exp
+    # the ledger opens itself on the first tick; open it by hand so this
+    # block counts only the decisions it states, and no others
+    exp.open_run(e)
+    check("a run with no per-day record answers None, not a guess",
+          exp.day_integrity(999) is None, "")
+
+    # day 5 thought for itself; day 6 had a mind drop
+    for _ in range(10):
+        exp.note_decision("model", day=5)
+    for _ in range(8):
+        exp.note_decision("model", day=6)
+    exp.note_decision("understudy", day=6)
+    exp.note_decision("model", day=7)
+    exp.note_decision("unparsed", day=7)
+
+    d5 = exp.day_integrity(5)
+    d6 = exp.day_integrity(6)
+    d7 = exp.day_integrity(7)
+    check("a clean day says so, by day number",
+          d5["clean"] and d5["live_pct"] == 100.0 and d5["day"] == 5, str(d5))
+    check("ONE understudy decision marks that DAY, not the whole run",
+          not d6["clean"] and d6["understudy"] == 1
+          and d6["live_pct"] == 88.9, str(d6))
+    check("an unparsed reply also disqualifies its day",
+          not d7["clean"] and d7["unparsed"] == 1, str(d7))
+    check("clean_days() names exactly the days a bar may be met on",
+          exp.clean_days() == [5], str(exp.clean_days()))
+
+    # THE WINDOW 2 PROBLEM: the run reads fine while a day inside it does not
+    run = exp.integrity()
+    check("the run total can look healthy while a day inside it is dirty",
+          run["live_pct"] > 90 and not run["clean"]
+          and exp.clean_days() == [5],
+          f"run {run['live_pct']}% but only day 5 is certifiable")
+
+    # and it survives a save/restore, or a verdict cannot cite it later
+    exp.write()
+    reread = [r for r in exp.read_all() if r["run_id"] == exp.run["run_id"]]
+    check("per-day provenance lands on disk with the run",
+          reread and reread[0].get("decisions_by_day", {}).get("6", {})
+          .get("understudy") == 1, "")
+
+    # the engine must actually pass the day through — the whole feature is
+    # useless if the one call site forgets
+    import inspect as _inspect
+    from sim import engine as _eng
+    src = _inspect.getsource(_eng.Engine._record_provenance)
+    check("the engine stamps every decision with its day",
+          "day=" in src and "clock.day" in src, "")
+    World.close_all()
+    fresh_data()
+
+_per_day_provenance()
+
 # ---- v3.6.3: the road must not eat people. (Found by review.) ----
 def _road_collision():
     fresh_data()
