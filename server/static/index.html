@@ -1141,72 +1141,67 @@ function drawBuilding(name, b, night) {
     ctx.fillText("📻", b.x + b.w - 8, b.y + 18);
   }
 
-  // built things & works-in-progress — monuments get proper plaques,
-  // laid out in wrapping rows that stay inside the building
+  // built things & works-in-progress — hung on the OUTSIDE wall (v3.7.1).
+  // They used to stack inside the building across two rows, which sat
+  // squarely on top of the villagers' own dots. Now they live in a column
+  // beside the building, so the inside belongs to the people.
   if (state.projects) {
-    const startX = b.x + b.w - (b.radio ? 30 : 10);
-    const minX = b.x + 8;
-    let px = startX, row = 0, hidden = 0;
-    const rowY = () => b.y + 4 + row * 26;
-    const advance = (w) => {
-      px -= w;
-      if (px - 30 < minX && row === 0) { row = 1; px = startX; }
-      else if (px - 30 < minX && row === 1) { row = 2; }
-    };
+    const colW = 40;
+    let slot = 0, col = 0, hidden = 0;
+    const maxSlots = Math.max(2, Math.floor((b.h - 4) / 26));
+    const cx = () => b.x + b.w + 10 + col * colW;
+    const cy = () => b.y + 2 + slot * 26;
+    const bump = () => { slot++; if (slot >= maxSlots) { slot = 0; col++; } };
     for (const p of state.projects) {
       if (p.site !== name) continue;
-      if (row >= 2) { if (p.complete || p.done > 0) hidden++; continue; }
+      if (col >= 2) { if (p.complete || p.done > 0) hidden++; continue; }
       if (p.complete) {
-        // plaque chip: warm border, dark fill, bold icon
         ctx.fillStyle = "rgba(38,33,22,0.95)";
         ctx.strokeStyle = "rgba(224,164,88,0.75)";
         ctx.lineWidth = 1;
-        rr(ctx, px - 24, rowY(), 24, 22, 6);
+        rr(ctx, cx(), cy(), 26, 22, 6);
         ctx.fill();
         ctx.stroke();
         ctx.font = "15px sans-serif";
         ctx.textAlign = "center";
         ctx.fillStyle = "#f0c98a";
-        ctx.fillText(p.icon || "🏛", px - 12, rowY() + 17);
-        advance(30);
+        ctx.fillText(p.icon || "\u{1F3DB}", cx() + 13, cy() + 17);
+        bump();
       } else if (p.stalled && p.done > 0) {
-        // shelved, not demolished: still standing, still buildable, just
-        // off the notice board. Grey, because nobody is working on it —
-        // not gone, because nobody tore it down.
-        const label = "⏸" + Math.round(100 * p.done / p.work) + "%";
+        const label = "\u23F8" + Math.round(100 * p.done / p.work) + "%";
         ctx.font = "700 12px sans-serif";
-        const lw = ctx.measureText(label).width + 14;
+        const lw = Math.max(30, ctx.measureText(label).width + 12);
         ctx.fillStyle = "rgba(28,28,28,0.9)";
         ctx.strokeStyle = "rgba(150,150,150,0.55)";
         ctx.lineWidth = 1.5;
-        rr(ctx, px - lw, rowY(), lw, 21, 6);
+        rr(ctx, cx(), cy(), lw, 21, 6);
         ctx.fill();
         ctx.stroke();
         ctx.textAlign = "center";
         ctx.fillStyle = "#b9b9b9";
-        ctx.fillText(label, px - lw / 2, rowY() + 15);
-        advance(lw + 6);
+        ctx.fillText(label, cx() + lw / 2, cy() + 15);
+        bump();
       } else if (p.done > 0) {
-        const label = "🔨" + Math.round(100 * p.done / p.work) + "%";
+        const label = "\u{1F528}" + Math.round(100 * p.done / p.work) + "%";
         ctx.font = "700 12px sans-serif";
-        const lw = ctx.measureText(label).width + 14;
+        const lw = Math.max(30, ctx.measureText(label).width + 12);
         ctx.fillStyle = "rgba(20,40,32,0.97)";
         ctx.strokeStyle = "rgba(127,240,200,0.9)";
         ctx.lineWidth = 1.5;
-        rr(ctx, px - lw, rowY(), lw, 21, 6);
+        rr(ctx, cx(), cy(), lw, 21, 6);
         ctx.fill();
         ctx.stroke();
         ctx.textAlign = "center";
         ctx.fillStyle = "#ffffff";
-        ctx.fillText(label, px - lw / 2, rowY() + 15);
-        advance(lw + 6);
+        ctx.fillText(label, cx() + lw / 2, cy() + 15);
+        bump();
       }
     }
     if (hidden > 0) {
       ctx.font = "700 10px sans-serif";
       ctx.fillStyle = "#c9b48a";
-      ctx.textAlign = "right";
-      ctx.fillText("+" + hidden + " more", b.x + b.w - 10, b.y + 58);
+      ctx.textAlign = "left";
+      ctx.fillText("+" + hidden + " more", b.x + b.w + 10, b.y + b.h + 12);
     }
   }
 
