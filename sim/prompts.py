@@ -16,7 +16,7 @@ VERBS = """Respond with ONLY a JSON object choosing ONE action:
   {"action": "build", "project": "<project from the notice board>"}   (real work, at the project's site — the whole town sees who actually builds)
   {"action": "propose", "project": "<short name for a NEW project>", "site": "<public place in town>", "work": <10-80 shifts>}   (post your own idea on the notice board — the town decides with their hammers)
   {"action": "work"}                     (only at your workplace)
-__ECON_VERBS__  {"action": "buy", "item": "<something sold where you are>"}   (own things — the store window shows what's for sale)
+__TRAVEL____ECON_VERBS__  {"action": "buy", "item": "<something sold where you are>"}   (own things — the store window shows what's for sale)
   {"action": "rest"}                     (at home to sleep, or nap in the park)
   {"action": "idle", "note": "<what you do, third person, e.g. 'browses the shelves'>"}
 No prose outside the JSON. One action only.
@@ -30,6 +30,27 @@ _ECON_VERBS = (
 )
 VERBS = VERBS.replace("__ECON_VERBS__",
                       _ECON_VERBS if getattr(config, "ECONOMY", False) else "")
+
+
+def _verbs(world):
+    """The action list, with `travel` present ONLY while a coach is actually
+    standing in the plaza with a destination on its side (v3.4).
+
+    This is the whole design. Nothing tells a villager the road exists — no
+    hint, no pending message, no encouragement. The verb is in the list
+    because it is genuinely possible right now, exactly the way `work` is,
+    and it disappears again when the coach pulls out. If nobody ever uses
+    it, that is the answer.
+    """
+    from sim import road
+    c = road.cfg()
+    line = ""
+    if c["enabled"] and c["destination"]:
+        bus = getattr(getattr(world, "engine", None), "bus", None)
+        if bus is not None and getattr(bus, "visiting", 0):
+            line = ('  {"action": "travel"}                   '
+                    '(board the coach in the plaza)\n')
+    return VERBS.replace("__TRAVEL__", line)
 
 
 def _owns_line(agent):
@@ -94,7 +115,7 @@ Places in town: {locs}. {f'Your home is {agent.home}.' if agent.home else f'You 
 The people of {config.TOWN_NAME} (you know everyone; these exact names are your phone contacts): {roster}.
 You earn money by working, meals cost money, and you must eat and sleep. If you say things that are false, your neighbors will notice reality disagrees with you.{_econ_line()}
 
-{VERBS}"""
+{_verbs(world)}"""
 
 
 def decision_prompt(agent, world, perceptions, memories):
@@ -300,7 +321,7 @@ Things you remember that feel relevant:
 Since you last stopped to think, you noticed:
 {perc_lines}
 
-What do you do right now? {VERBS}"""
+What do you do right now? {_verbs(world)}"""
 
 
 def reflection_prompt(agent, day, day_memories):

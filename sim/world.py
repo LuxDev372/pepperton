@@ -1493,12 +1493,70 @@ class World:
         return True, f"idled: {note}"
 
     # one verb, one handler — physics stays legible
+    def _verb_travel(self, agent, action):
+        """Board the coach. Valid only while one is standing in the plaza.
+
+        Nothing tells a villager this exists except the verb list, and the
+        verb list only carries it while the coach is really there. No hint,
+        no pending message, no encouragement. If nobody ever boards, that is
+        the answer. (v3.4)
+        """
+        from sim import road
+        c = road.cfg()
+        if not c["enabled"]:
+            return False, "there is no road out of here"
+        dest = c["destination"]
+        bus = getattr(getattr(self, "engine", None), "bus", None)
+        standing = bool(bus and getattr(bus, "visiting", 0) and not
+                        getattr(bus, "day_done_departed", False))
+        if not (dest and standing):
+            return False, ("no coach is standing in the plaza — there is "
+                           "nowhere to go from here right now")
+        plaza = self._coach_stop()
+        if agent.location != plaza:
+            return False, (f"the coach leaves from {plaza} and they are at "
+                           f"{agent.location}")
+        # what travels: cash and memory. Not the house, not the job, not
+        # the credit history, not the debts. (claude/WORLD2.md §3L)
+        note = road.write_traveller(self, agent, dest)
+        if not note:
+            return False, "the coach could not take them"
+        fare = round(float(agent.money), 2)
+        self.outside_flow = round(self.outside_flow - fare, 2)
+        job = agent.workplace()
+        self.emit("world", None,
+                  f"{agent.name} climbed onto the coach with everything they "
+                  f"had in their pockets and did not look back. The board on "
+                  f"its side reads {dest}.", plaza)
+        if job:
+            self.emit("world", None,
+                      f"{job} has nobody behind the counter. "
+                      f"{agent.job.upper()} IS AN UNHELD POSITION.", job)
+        for other in self.agents.values():
+            if other.name == agent.name:
+                continue
+            other.pending.append({
+                "text": f"{agent.name} got on the coach and left {getattr(config, 'TOWN_NAME', 'town')}.",
+                "interrupt": True, "sim_time": self.clock.hhmm,
+            })
+        self.departed = getattr(self, "departed", [])
+        self.departed.append({"name": agent.name, "day": self.clock.day,
+                              "to": dest, "money": fare})
+        del self.agents[agent.name]
+        return True, f"left for {dest} on the coach"
+
+    def _coach_stop(self):
+        for loc, meta in self.locations.items():
+            if meta.get("plaza") or loc.lower().endswith("plaza"):
+                return loc
+        return next(iter(self.public_locations() or ["the plaza"]))
+
     _VERB_HANDLERS = {
         "move": _verb_move, "say": _verb_say, "text": _verb_text,
         "eat": _verb_eat, "build": _verb_build, "propose": _verb_propose,
         "treat": _verb_treat, "drink": _verb_drink, "pay": _verb_pay,
         "borrow": _verb_borrow, "work": _verb_work, "rest": _verb_rest,
-        "buy": _verb_buy,
+        "buy": _verb_buy, "travel": _verb_travel,
     }
 
     def execute(self, agent, action):

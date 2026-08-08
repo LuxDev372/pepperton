@@ -54,6 +54,7 @@ LATE_KNOBS = {
     "BUS": {},
     "LOYALTY": {},
     "TOWNSFOLK": {},
+    "TRAVEL": {},
 }
 
 def knob(name):
@@ -1968,7 +1969,128 @@ def _half_an_emoji():
     World.close_all()
     fresh_data()
 
+def _the_road():
+    """v3.4 — one verb and a mailbox.
+
+    The design in one sentence: the verb exists ONLY while a coach is
+    actually standing in the plaza with a destination on its side, and
+    nothing anywhere tells a villager it is there. These tests guard the
+    silence as carefully as the mechanism."""
+    import json as _json
+    from sim import road
+    fresh_data()
+    old, had_old = snapshot_knob("TRAVEL")
+    roadbox = os.path.join(SCRATCH, "road")
+    shutil.rmtree(roadbox, ignore_errors=True)
+    try:
+        # ---- DARK: the verb does not exist and the coach says nothing ----
+        config.TRAVEL = dict(old, enabled=False, road=roadbox,
+                             destination=config.TOWN_NAME)
+        e = Engine(seed=61)
+        w = e.world
+        e.bus.visiting = 6                      # a coach IS standing there
+        a = list(w.agents.values())[0]
+        a.asleep = False
+        a.location = w._coach_stop()
+        ok, note = w.execute(a, {"action": "travel"})
+        check("a dark road cannot be travelled", not ok, (note or "")[:50])
+        from sim import prompts
+        check("and the verb is not in the action list", '"travel"'
+              not in prompts._verbs(w), "")
+
+        # ---- ARMED, no coach: still nothing ----
+        config.TRAVEL = dict(old, enabled=True, road=roadbox,
+                             destination=config.TOWN_NAME)
+        e.bus.visiting = 0
+        check("no coach standing, no verb offered",
+              '"travel"' not in prompts._verbs(w), "")
+        ok, note = w.execute(a, {"action": "travel"})
+        check("...and boarding a coach that isn't there fails",
+              not ok, (note or "")[:60])
+
+        # ---- COACH IN THE PLAZA: the verb appears ----
+        e.bus.visiting = 6
+        check("THE COACH ARRIVES AND THE VERB APPEARS",
+              '"travel"' in prompts._verbs(w), "in the list because it is real")
+        check("and nobody is told about it — no pending message, no hint",
+              not any("travel" in str(p.get("text", "")).lower()
+                      or "leave town" in str(p.get("text", "")).lower()
+                      for v in w.agents.values() for p in v.pending), "")
+
+        # ---- wrong place, no ride ----
+        elsewhere = next(p for p in w.public_locations()
+                         if p != w._coach_stop())
+        a.location = elsewhere
+        ok, note = w.execute(a, {"action": "travel"})
+        check("the coach leaves from the plaza and nowhere else",
+              not ok, (note or "")[:60])
+
+        # ---- BOARD ----
+        a.location = w._coach_stop()
+        a.money = 14.27
+        job, home = a.workplace(), a.home
+        n_before = len(w.agents)
+        ok, note = w.execute(a, {"action": "travel"})
+        check("A VILLAGER BOARDS THE COACH", ok, (note or "")[:50])
+        check("...and is gone from the town",
+              a.name not in w.agents and len(w.agents) == n_before - 1, "")
+        files = [f for f in os.listdir(roadbox) if f.startswith("traveller-")]
+        check("...leaving a note on the road", len(files) == 1,
+              files[0] if files else "none")
+        packed = _json.load(open(os.path.join(roadbox, files[0]),
+                                 encoding="utf-8"))
+        check("their money is in their pocket",
+              packed["money"] == 14.27, str(packed["money"]))
+        check("their memories are in the suitcase",
+              isinstance(packed.get("memories"), list), "")
+        check("their HOUSE, JOB and DEBTS are NOT",
+              "home" not in packed and "job" not in packed
+              and "debts" not in packed, "you carry a life, not an estate")
+        if job:
+            check("and the job they left is announced as unheld",
+                  any("UNHELD POSITION" in str(ev.get("text", ""))
+                      for ev in w.events[-6:]), "")
+        World.close_all()
+        fresh_data()
+
+        # ---- ARRIVAL in a different town ----
+        e2 = Engine(seed=77)
+        w2 = e2.world
+        before = set(w2.agents)
+        note2 = road.take_traveller(config.TOWN_NAME)
+        check("the receiving town finds them waiting on the road",
+              note2 is not None and note2["name"] == packed["name"], "")
+        check("and claiming is atomic — a second town gets nobody",
+              road.take_traveller(config.TOWN_NAME) is None,
+              "claimed by rename, so two towns cannot take one person")
+        landed = road.land_traveller(e2, note2)
+        check("A REAL PERSON STEPS OFF THE COACH",
+              landed is not None and landed.name in w2.agents
+              and set(w2.agents) - before == {landed.name}, "")
+        check("...carrying their money across",
+              round(landed.money, 2) == 14.27, f"${landed.money}")
+        check("...and their memories, rewritten into this town's book",
+              e2.memory.count(landed.name) > 0,
+              f"{e2.memory.count(landed.name)} rows")
+        check("...with no house, no job and no standing here",
+              landed.home is None and not landed.workplace()
+              and not landed.relationships, "a stranger with a past")
+        check("...and a mind of their own, not an understudy",
+              landed.name in e2.brains, "")
+        check("the town is told somebody got off and STAYED",
+              any("stayed" in str(p.get("text", "")).lower()
+                  for v in w2.agents.values() if v.name != landed.name
+                  for p in v.pending), "")
+        check("every dollar they brought is audited as outside money",
+              round(w2.outside_flow, 2) >= 14.27, f"{w2.outside_flow}")
+    finally:
+        restore_knob("TRAVEL", old, had_old)
+        shutil.rmtree(roadbox, ignore_errors=True)
+    World.close_all()
+    fresh_data()
+
 _townsfolk()
+_the_road()
 _half_an_emoji()
 _no_charity_from_the_gods()
 _town_report()

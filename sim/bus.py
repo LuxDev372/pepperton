@@ -99,11 +99,27 @@ class BusRoute:
         self.visiting = self.rng.randint(c["visitors"][0], c["visitors"][1])
         self.spent_today = {}
         world = self.world
+        # the board on the side of the coach (v3.4). A destination is a
+        # fact about a vehicle, not a suggestion — same class of thing as a
+        # price tag. It is the only thing anyone is ever told about the road.
+        from sim import road
+        rc = road.cfg()
+        board = (f" The board on its side reads {rc['destination']}."
+                 if rc["enabled"] and rc["destination"] else "")
         world.emit("world", None,
                    f"A coach pulls into the plaza and {self.visiting} "
                    f"sightseers step down, blinking at the light — cameras "
                    f"out, wallets fat, an afternoon to spend before the bus "
-                   f"leaves again.", "the plaza")
+                   f"leaves again.{board}", "the plaza")
+        # anybody waiting on the road gets off here
+        if rc["enabled"] and rc["accepts"]:
+            engine = getattr(world, "engine", None)
+            if engine is not None:
+                for _ in range(3):
+                    note = road.take_traveller(rc["destination"])
+                    if not note:
+                        break
+                    road.land_traveller(engine, note)
         for villager in world.agents.values():
             villager.pending.append({
                 "text": (f"A tour bus just stopped in the plaza. "

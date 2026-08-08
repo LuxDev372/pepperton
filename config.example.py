@@ -525,17 +525,8 @@ WS_PUSH_INTERVAL = 0.5      # seconds between websocket state pushes
 
 # ---------------------------------------------------------------- data
 DB_PATH = "data/pepperton.db"
-STATE_PATH = "data/world_state.json"
 TRANSCRIPT_JSONL = "data/transcript.jsonl"
 TRANSCRIPT_LOG = "data/transcript.log"
-
-# The experiment ledger (v3.1.0). One record per engine lifetime: code
-# version, config hash, seed, the cast with their models, every decision
-# counted by WHO made it, and every time a human reached in. Leave this on.
-# We once narrated ten days of a scripted understudy as emergent behaviour
-# because nothing on disk said what had actually been running.
-EXPERIMENT_LEDGER = True
-LEDGER_PATH = "data/experiments.json"
 
 # ------------------------------------------------------- decision cadence
 # The brain (LLM) is consulted only when something warrants it — activity
@@ -552,3 +543,21 @@ REFLECTION_TIME = "23:30"
 MEMORY_TOP_K = 8
 MEMORY_WEIGHTS = {"recency": 1.0, "importance": 1.0, "relevance": 1.2}
 MEMORY_RECENCY_HALFLIFE_TICKS = 96   # one sim day
+
+# ------------------------------------------------------------------ the road
+# One verb and a mailbox (v3.4). While a coach is standing in the plaza with
+# a destination on its side, `travel` appears in the action list. Board it and
+# you leave this town for good, carrying your cash and your memories and
+# nothing else — not your house, not your job, not your credit, not your
+# debts. The towns never talk to each other; they pass notes through a shared
+# folder that both can see.
+#
+# NOBODY IS PUT ON THE COACH. No hint, no nudge, no pending message. If
+# nobody ever boards, that is the answer.
+TRAVEL = {
+    "enabled": False,
+    "road": "~/pepperton-road",
+    "destination": None,   # what the board on the side of the coach reads
+    "accepts": True,       # will this town take arrivals off its own coach
+    "memories": 200,       # how much of a life fits in one suitcase
+}
