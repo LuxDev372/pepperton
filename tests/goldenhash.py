@@ -105,7 +105,18 @@ for seed in SEEDS:
     engine.run_headless(TICKS)
     for line in open("data/transcript.jsonl", encoding="utf-8"):
         event = json.loads(line)
-        event.pop("wid", None)   # world_id is a fresh uuid each boot
+        # Per-boot identity is not physics. world_id is a fresh uuid every
+        # time a town starts, and ekinnee's causal envelope derives three
+        # more identifiers from it — so an event that is byte-identical in
+        # every way that matters still hashes differently on every run.
+        #
+        # THIS HARNESS MADE HIS WORK LOOK NON-DETERMINISTIC. It was ours.
+        # We stripped `wid` and stopped, then read the moving hash as a
+        # fault in a contributor's thirteen-PR stack. An instrument that
+        # cannot say what it is cannot be trusted to say anything else —
+        # including what it thinks of somebody else's code. (LESSONS.md #1)
+        for per_boot in ("wid", "event_id", "cause_event_id", "command_id"):
+            event.pop(per_boot, None)
         fingerprint.update(json.dumps(event, sort_keys=True).encode())
     world = engine.world
     end_state = {
