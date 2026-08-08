@@ -119,7 +119,29 @@ class BusRoute:
                     note = road.take_traveller(rc["destination"])
                     if not note:
                         break
-                    road.land_traveller(engine, note)
+                    # NEVER DISCARD THIS RETURN VALUE (v3.6.3). None means
+                    # the person could not be landed — a name collision
+                    # with someone already living here. They have already
+                    # been deleted from the town they left and their cash
+                    # is already off that town's books, so dropping them
+                    # here does not lose money, it loses a whole person and
+                    # consumes the file that was the only copy of them.
+                    # Put them back on the road instead and stop; the next
+                    # coach can try again, and an operator can look.
+                    # (Found by review, v3.6.3.)
+                    if road.land_traveller(engine, note) is None:
+                        name = note.get("name")
+                        if road.release_traveller(note):
+                            print(f"[ROAD] could not land {name} — the name "
+                                  f"is already taken here. Put back on the "
+                                  f"road, still whole, waiting for another "
+                                  f"coach.", flush=True)
+                        else:
+                            print(f"[ROAD] ⚠ could not land {name} AND could "
+                                  f"not return them to the road. Their file "
+                                  f"is at {note.get('_file')} — it is the "
+                                  f"only copy of that person.", flush=True)
+                        break
         for villager in world.agents.values():
             villager.pending.append({
                 "text": (f"A tour bus just stopped in the plaza. "

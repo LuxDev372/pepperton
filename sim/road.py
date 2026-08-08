@@ -141,6 +141,34 @@ def take_traveller(destination):
     return None
 
 
+def release_traveller(note):
+    """Put a claimed traveller back on the road, unharmed (v3.6.3).
+
+    take_traveller() claims by renaming to `.arrived`, which is atomic and
+    correct — but it means the claim happens BEFORE we know whether the
+    person can actually be landed. land_traveller() returns None on a name
+    collision, and the caller used to throw that None away.
+
+    A traveller is already deleted from the town they left, and their cash
+    is already out of that town's outside_flow. So a dropped landing did
+    not lose money — it lost A PERSON. Cash, memories, the whole life, with
+    the file already consumed so nothing could ever retry it. The road
+    would have eaten someone quietly, and the only trace would have been an
+    audit that no longer balanced across two towns nobody audits together.
+    (Found by review, v3.6.3.)
+
+    Returns True if the note is back on the road and claimable again."""
+    path = (note or {}).get("_file") or ""
+    if not path.endswith(".arrived"):
+        return False
+    original = path[:-len(".arrived")]
+    try:
+        os.replace(path, original)
+        return True
+    except OSError:
+        return False
+
+
 def land_traveller(engine, note):
     """Step a real person off the coach.
 

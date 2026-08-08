@@ -710,6 +710,71 @@ def _keepsakes():
 
 _keepsakes()
 
+# ---- v3.6.3: the road must not eat people. (Found by review.) ----
+def _road_collision():
+    fresh_data()
+    import json as _json
+    import tempfile as _tf
+    from sim import road
+    _t, _had_t = snapshot_knob("TRAVEL")
+    roaddir = _tf.mkdtemp(prefix="roadtest-")
+    config.TRAVEL = {"enabled": True, "road": roaddir,
+                     "destination": None, "accepts": True, "memories": 50}
+    try:
+        e = Engine(seed=61)
+        w = e.world
+        resident = list(w.agents.values())[0]
+        purse_before = resident.money
+        flow_before = w.outside_flow
+
+        # a traveller arrives carrying $40 and the name of someone who
+        # already lives here — the collision the reviewer found
+        note = {"schema": 1, "id": "collide01", "from_town": "Elsewhere",
+                "from_day": 9, "to_town": getattr(config, "TOWN_NAME", "?"),
+                "name": resident.name, "traits": [], "quirk": "", "goal": "",
+                "money": 40.0, "needs": {}, "relationships": {},
+                "memories": [{"kind": "event", "text": "my whole life",
+                              "importance": 9}]}
+        path = os.path.join(roaddir, "traveller-collide01.json")
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(note, f)
+
+        claimed = road.take_traveller(getattr(config, "TOWN_NAME", "?"))
+        check("a waiting traveller is claimed off the road",
+              claimed is not None and claimed.get("name") == resident.name, "")
+        check("...and claiming consumes the file, so there is no second try",
+              not os.path.exists(path), "")
+
+        landed = road.land_traveller(e, claimed)
+        check("a name collision refuses the landing", landed is None, "")
+        check("...and does not overwrite the living villager",
+              w.agents[resident.name] is resident
+              and w.agents[resident.name].money == purse_before, "")
+        check("...and invents no money on the way in",
+              w.outside_flow == flow_before, f"{w.outside_flow}")
+
+        check("A DROPPED TRAVELLER IS PUT BACK ON THE ROAD, WHOLE",
+              road.release_traveller(claimed) and os.path.exists(path),
+              "the only copy of that person")
+        with open(path, encoding="utf-8") as f:
+            back = _json.load(f)
+        check("...with their money and their memories intact",
+              back["money"] == 40.0 and back["memories"][0]["text"] == "my whole life",
+              f"${back.get('money')}")
+        check("...and they can be claimed again by the next coach",
+              road.take_traveller(getattr(config, "TOWN_NAME", "?")) is not None, "")
+
+        # releasing something that was never claimed must be a no-op
+        check("releasing an unclaimed note changes nothing",
+              road.release_traveller({"_file": path}) is False, "")
+        World.close_all()
+    finally:
+        restore_knob("TRAVEL", _t, _had_t)
+        shutil.rmtree(roaddir, ignore_errors=True)
+        fresh_data()
+
+_road_collision()
+
 # ---- v2.4.1 regression: v2.4 must boot on a pre-2.4 config ----
 def _old_config_boot():
     fresh_data()
