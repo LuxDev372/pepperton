@@ -324,4 +324,88 @@ finally:
 check("failed bootstrap migration closes its SQLite store",
       migration_failed and len(closed_failed_stores) == 1)
 
+
+# ---- v3.6.2: orphaned temp files. (Found by review.) ----
+import ast as _ast
+import glob as _glob
+from sim.store import TMP_PREFIXES
+
+_dir = os.path.dirname(getattr(config, "STATE_PATH", "data/world_state.json")) or "."
+os.makedirs(_dir, exist_ok=True)
+_orphans = [os.path.join(_dir, p + "a7f3k2" + ".tmp") for p in TMP_PREFIXES]
+for _p in _orphans:
+    with open(_p, "w") as _f:
+        _f.write("half a checkpoint, killed mid-write")
+_bystander = os.path.join(_dir, "world_state.json")
+_had_bystander = os.path.exists(_bystander)
+
+_store = TownStore(world_id="sweeptest")
+check("a kill mid-atomic-write leaves nothing behind",
+      not any(os.path.exists(p) for p in _orphans))
+check("...and the sweep does not eat the live checkpoint",
+      os.path.exists(_bystander) == _had_bystander)
+_store.close()
+
+# The sweep matches by prefix, and mkstemp names are random — so a new
+# atomic-write call site whose prefix nobody registered leaves orphans that
+# NOTHING will ever match. Read the parse tree and make that impossible.
+_src = open(os.path.join(ROOT, "sim", "store.py"), encoding="utf-8").read()
+_used = set()
+for _node in _ast.walk(_ast.parse(_src)):
+    if (isinstance(_node, _ast.Call)
+            and isinstance(_node.func, _ast.Attribute)
+            and _node.func.attr == "mkstemp"):
+        for _kw in _node.keywords:
+            if _kw.arg == "prefix" and isinstance(_kw.value, _ast.Constant):
+                _used.add(_kw.value.value)
+check("every atomic-write prefix in store.py is registered for sweeping",
+      _used and _used <= set(TMP_PREFIXES),
+      f"unregistered: {sorted(_used - set(TMP_PREFIXES))}")
+
+
+# ---- v3.6.2: a dead town must not read as "running". (Found by review.) ----
+# The ledger exists so a run cannot lie about itself afterward. Until now
+# only stop() closed it — and stop() is reached solely via the server's
+# clean-shutdown handler, which calls save_state() FIRST. A persistent disk
+# fault therefore raised again on the way out, the exception was swallowed,
+# and experiments.json said "running" for a town that was dead. Forever.
+import sim.experiment as _expmod
+
+_closed_with = []
+_orig_close = _expmod.ExperimentLedger.close
+
+
+def _spy_close(self, engine, reason="stopped"):
+    _closed_with.append(reason)
+    return _orig_close(self, engine, reason)
+
+
+_expmod.ExperimentLedger.close = _spy_close
+try:
+    _e = Engine(seed=11)
+    _e.running = True
+
+    # the fatal-persistence path, taken directly
+    _e._close_books("died: persistence failure")
+    check("a town killed by a disk fault closes its own books",
+          _closed_with == ["died: persistence failure"],
+          str(_closed_with))
+
+    # and the books are shut exactly once, however many paths hit them
+    _e._close_books("stopped")
+    _e.stop()
+    check("...and the books are never closed twice",
+          _closed_with == ["died: persistence failure"], str(_closed_with))
+
+    # closing the books must never mask the failure that is closing them
+    _expmod.ExperimentLedger.close = lambda s, e, reason="stopped": (
+        _ for _ in ()).throw(OSError("ledger disk is gone too"))
+    _e2 = Engine(seed=12)
+    _e2._close_books("died: persistence failure")
+    check("a ledger that cannot be written does not raise over the crash",
+          True)
+    _e2.world.close()
+finally:
+    _expmod.ExperimentLedger.close = _orig_close
+
 print("TownStore proof complete")

@@ -702,6 +702,7 @@ class Engine:
                               f"{self.world.tick_no + 1}; town stopped:",
                               flush=True)
                         traceback.print_exc()
+                        self._close_books("died: persistence failure")
                         self.world.close()
                         return
                     except Exception:
@@ -718,6 +719,7 @@ class Engine:
                                   "before advancing beyond unsaved state:",
                                   flush=True)
                             traceback.print_exc()
+                            self._close_books("died: checkpoint failure")
                             self.world.close()
                             return
                 # between ticks the lock is free — apply anything the
@@ -728,6 +730,35 @@ class Engine:
         self._thread = threading.Thread(target=loop, daemon=True, name="pepperton-engine")
         self._thread.start()
 
+    def _close_books(self, reason):
+        """Shut the experiment ledger, once, from any path — including the
+        ones that end in a traceback (v3.6.2).
+
+        THE LEDGER EXISTS SO A RUN CANNOT LIE ABOUT ITSELF AFTERWARD. Until
+        now the only thing that closed it was stop(), reachable solely
+        through the server's clean-shutdown handler — which calls
+        save_state() first, in the same try. So a town killed by a
+        *persistent* disk or database fault raised again on the way out, the
+        exception was swallowed, stop() never ran, and data/experiments.json
+        recorded `"ended_reason": "running"` for a town that was dead on the
+        floor. Forever.
+
+        That is the v3.2.1 SHUTDOWN GAP exactly, reached down a crash path
+        the original fix never looked at. (Found by review, v3.6.2.)
+
+        Never raises: the books closing is not allowed to mask the failure
+        that is closing them, and a ledger that cannot be written is still
+        better news than one that quietly says the town is fine."""
+        if getattr(self, "_books_closed", False):
+            return
+        self._books_closed = True
+        try:
+            self.exp.close(self, reason)
+        except Exception:
+            print(f"[ENGINE] could not close the experiment ledger "
+                  f"({reason}) — the run will read as unfinished",
+                  flush=True)
+
     def stop(self):
         self.running = False
         self._stop_event.set()
@@ -735,7 +766,7 @@ class Engine:
         if thread is not None and thread is not threading.current_thread():
             thread.join()
         # books closed AFTER the last tick lands and BEFORE the handles go
-        self.exp.close(self, "stopped")
+        self._close_books("stopped")
         self.world.close()
 
     # ------------------------------------------------------------- state
@@ -910,7 +941,23 @@ class Engine:
             "employed": len(employed),
             "worked_today": len([a for a in employed
                                  if a.name in world.worked_today]),
-            "turned_away_today": len(getattr(world, "turned_away_today", ())),
+            # THE STRIP AND THE LEDGER MUST NOT DISAGREE (v3.6.2). A worker
+            # sent home mid-shift by insolvency lands in BOTH worked_today
+            # and turned_away_today, and attendance_ledger() checks
+            # worked_today first — so the town's own public record narrates
+            # them ON SHIFT while this counter called them turned away. Two
+            # records of the same afternoon, disagreeing. The ledger's
+            # reading is the fairer one and it is the one the villagers can
+            # see, so the dashboard defers to it. (Found by review, v3.6.2.)
+            #
+            # NOTE FOR WHOEVER READS THIS NUMBER NEXT: it counts VILLAGERS
+            # REFUSED A SHIFT because their employer could not pay. It has
+            # never counted TOWNSFOLK who tried a door and found it shut —
+            # that number is counted by nothing we own, which is the more
+            # interesting hole. (claude/DAY131.md)
+            "turned_away_today": len(
+                set(getattr(world, "turned_away_today", ()))
+                - set(getattr(world, "worked_today", ()))),
             "longest_absence": max(
                 [world.absence_streaks.get(a.name, 0) for a in employed],
                 default=0),

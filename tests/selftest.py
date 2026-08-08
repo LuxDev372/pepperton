@@ -2018,6 +2018,21 @@ def _review_fixes_v331():
         posted = [ev for ev in w.events
                   if "ATTENDANCE LEDGER" in str(ev.get("text", ""))]
         text = str(posted[-1]["text"]) if posted else ""
+        # v3.6.2 (Found by review): the strip and the ledger must agree.
+        # A worker sent home mid-shift lands in BOTH sets and the ledger
+        # calls them ON SHIFT — so the dashboard must not simultaneously
+        # call them turned away. Two public records of one afternoon
+        # cannot disagree about it.
+        w.worked_today.add("Ghost Villager")
+        w.turned_away_today.add("Ghost Villager")
+        w.turned_away_today.add("Refused Villager")
+        check("the vitals strip does not contradict the attendance ledger",
+              e.vitals()["turned_away_today"] == 1,
+              f'counted {e.vitals()["turned_away_today"]}, want 1')
+        w.worked_today.discard("Ghost Villager")
+        w.turned_away_today.discard("Ghost Villager")
+        w.turned_away_today.discard("Refused Villager")
+
         check("the evening ledger reports it honestly, by name",
               "EARNED ELSEWHERE" in text
               and shopkeep.name.split()[0] in text, text[:70])

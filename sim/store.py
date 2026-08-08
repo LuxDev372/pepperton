@@ -20,6 +20,12 @@ from sim.memory import MemoryStore
 
 SCHEMA_VERSION = 1
 
+# Every mkstemp prefix this module writes with. If you add an atomic-write
+# call site, add its prefix here or its orphans become permanent litter —
+# mkstemp names are random and nothing else will ever match them.
+TMP_PREFIXES = (".world_state.", ".transcript.", ".transcript-log.",
+                ".transcript-migrate.")
+
 # A lone surrogate is not text. It is half of a character.
 #
 # Pepperton stopped starting on 2026-08-07 with:
@@ -78,7 +84,44 @@ class TownStore:
         self._ensure_parent(self.db_path)
         self._ensure_parent(self.transcript_jsonl)
         self._ensure_parent(self.transcript_log)
+        self.sweep_orphans()
         self.memory = MemoryStore(db_path=self.db_path, world_id=world_id)
+
+    def sweep_orphans(self):
+        """Delete temp files left behind by a kill mid-atomic-write (v3.6.2).
+
+        Every durable write here is mkstemp-then-os.replace, which is the
+        right shape — but mkstemp names the temp file with a RANDOM suffix,
+        so a hard kill between the two leaves `.world_state.a7f3k2.tmp`
+        lying in data/ with nothing anywhere that would ever remove it.
+
+        run.py's --fresh looked like the cleanup and was not: it unlinks the
+        literal string `world_state.json.tmp`, a name mkstemp cannot
+        produce. Dead code that resembled a safety net. On a long-running,
+        crash-prone deployment these orphans accumulate forever.
+        (Found by review, v3.6.2.)
+
+        Swept at open, when nothing of ours is mid-write by definition.
+        Never raises — a town must still boot on a read-only or crowded
+        disk. Returns the count, so a test can prove it did something."""
+        removed = 0
+        dirs = {os.path.dirname(p) or "." for p in
+                (self.state_path, self.transcript_jsonl, self.transcript_log)}
+        for directory in sorted(dirs):
+            try:
+                names = os.listdir(directory)
+            except OSError:
+                continue
+            for name in names:
+                if not (name.endswith(".tmp")
+                        and any(name.startswith(p) for p in TMP_PREFIXES)):
+                    continue
+                try:
+                    os.unlink(os.path.join(directory, name))
+                    removed += 1
+                except OSError:
+                    pass
+        return removed
 
     @staticmethod
     def _ensure_parent(path):
@@ -88,7 +131,20 @@ class TownStore:
 
     @staticmethod
     def _fsync_parent(path):
-        """Persist a completed atomic replacement where the OS supports it."""
+        """Persist a completed atomic replacement where the OS supports it.
+
+        ⚠ WINDOWS DURABILITY GAP, STATED PLAINLY (v3.6.2). There is no
+        portable way to fsync a directory entry on Windows, so this returns
+        and the rename is never flushed to the platter. `os.replace` is
+        still atomic there — no torn or half-written checkpoint is possible,
+        and no correctness bug follows. But on sudden power loss a Windows
+        town can come back to the checkpoint BEFORE its last save, where a
+        Linux town would not.
+
+        This was silent until an external reviewer named it: not a bug, but
+        an undisclosed exposure sitting inside a module whose whole claim is
+        durability. If your town matters and it runs on Windows, that is the
+        gap. (Found by review, v3.6.2.)"""
         if os.name == "nt":
             return
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
