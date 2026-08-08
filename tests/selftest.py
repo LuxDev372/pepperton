@@ -50,6 +50,7 @@ LATE_KNOBS = {
     "INCOME_TAX": 0.15,
     "HIRING_ENABLED": True,
     "CONDEMN_GRACE_DAYS": 3,
+    "CONDEMN_ENABLED": True,
     "FORECLOSURE": {},
     "BUS": {},
     "LOYALTY": {},
@@ -67,6 +68,11 @@ def snapshot_knob(name):
     it is still a lie about the config, and lies about the config are the
     whole reason this section exists."""
     return dict(knob(name)), hasattr(config, name)
+
+def snapshot_flag(name):
+    """Scalar twin of snapshot_knob. CONDEMN_ENABLED is a bool and dict()
+    would choke on it; restore_knob puts either kind back."""
+    return knob(name), hasattr(config, name)
 
 def restore_knob(name, value, existed):
     if existed:
@@ -480,6 +486,18 @@ _poor_box()
 # ---- appended by v2.4: the Fall Fair Act ----
 def _permits():
     fresh_data()
+    # v3.5: this block asserts the WRECKING CREW, so it must arm the
+    # wrecking crew itself. Pepperton runs CONDEMN_ENABLED = False, and a
+    # test that asserts a config state it did not set is the v3.3.2 bug all
+    # over again — 181/188 on the operator's machine and green on mine.
+    _c, _had_c = snapshot_flag("CONDEMN_ENABLED")
+    config.CONDEMN_ENABLED = True
+    try:
+        _permits_body()
+    finally:
+        restore_knob("CONDEMN_ENABLED", _c, _had_c)
+
+def _permits_body():
     e = Engine(seed=61)
     w = e.world
     ags = list(w.agents.values())
@@ -530,6 +548,99 @@ def _permits():
     fresh_data()
 
 _permits()
+
+# ---- v3.5: the shelf. What the town does instead of demolishing. ----
+def _the_shelf():
+    fresh_data()
+    _c, _had_c = snapshot_flag("CONDEMN_ENABLED")
+    config.CONDEMN_ENABLED = False
+    try:
+        e = Engine(seed=61)
+        w = e.world
+        a = list(w.agents.values())[0]
+        b = list(w.agents.values())[1]
+        for stock in list(w.projects):
+            stock["complete"] = True
+
+        a.location = "the plaza"
+        ok, _ = w.execute(a, {"action": "propose", "project": "the bandstand",
+                              "site": "the plaza", "work": 40})
+        proj = next(p for p in w.projects if p["name"] == "the bandstand")
+        proj["contributors"][b.name] = 4
+        proj["done"] = 4
+
+        # deadline, then grace, then the crew that never comes
+        w.clock.day = proj["permit_due"] + 1
+        w.permit_sweep()
+        warned = [ev for ev in w.events if "PERMIT EXPIRED" in ev["text"]]
+        check("a retired wrecking crew is never threatened",
+              warned and "tear" not in warned[-1]["text"].lower()
+              and "condemn" not in warned[-1]["text"].lower(),
+              warned[-1]["text"][:70] if warned else "no warning emitted")
+
+        w.clock.day = proj["condemn_day"] + 1
+        w._permit_day_done = 0
+        w.permit_sweep()
+
+        still = next((p for p in w.projects if p["name"] == "the bandstand"),
+                     None)
+        check("shelved work is not torn down", still is not None, "gone")
+        check("shelved work is still standing at its site",
+              still is not None and still["site"] == "the plaza"
+              and still["done"] == 4, "")
+        check("shelved work keeps everyone's shifts",
+              still is not None and still["contributors"].get(b.name) == 4,
+              f"{still and still['contributors']}")
+        check("nothing is emitted about a demolition",
+              not any("CONDEMNED" in ev["text"] for ev in w.events), "")
+
+        # it frees a board slot — the whole reason shelving beats stalling
+        for i in range(3):
+            a.location = "the plaza"
+            ok2, msg2 = w.execute(a, {"action": "propose",
+                                      "project": f"the woodshed {i}",
+                                      "site": "the plaza", "work": 20})
+            check(f"a shelved project frees the notice board ({i + 1}/3)",
+                  ok2, msg2)
+        a.location = "the plaza"
+        ok3, msg3 = w.execute(a, {"action": "propose", "project": "one too many",
+                                  "site": "the plaza", "work": 20})
+        check("shelving does not uncap the board", not ok3, msg3[:50])
+
+        # and a hammer still works on it
+        b.location = "the plaza"
+        b.possessions.append("carpenter's tools")
+        okb, msgb = w.execute(b, {"action": "build", "project": "the bandstand"})
+        check("shelved work can still be picked back up", okb, msgb[:60])
+        check("picking it back up still counts",
+              still["done"] == 5 and still["contributors"][b.name] == 5,
+              f"{still['done']}/{still['work']}")
+
+        # it can never be fined or condemned a second time
+        # (the three woodsheds run out their own permits in this sweep and
+        # get fined — that is the law working. Count only the bandstand's.)
+        def _bandstand_fines():
+            return len([d for d in w.open_debts(creditor=config.TOWN_FUND)
+                        if "bandstand" in d["reason"]])
+        before = _bandstand_fines()
+        w.clock.day += 10
+        w._permit_day_done = 0
+        w.permit_sweep()
+        check("the shelf is permanent — no second fine, no second sweep",
+              any(p["name"] == "the bandstand" and p.get("stalled")
+                  for p in w.projects)
+              and _bandstand_fines() == before, "")
+
+        # the notice board tells them the truth about it
+        from sim import prompts
+        board = prompts.decision_prompt(b, w, [], [])
+        check("the board says it is shelved and still buildable",
+              "SHELVED" in board and "still standing" in board, "")
+    finally:
+        restore_knob("CONDEMN_ENABLED", _c, _had_c)
+        fresh_data()
+
+_the_shelf()
 
 # ---- v2.4.1 regression: v2.4 must boot on a pre-2.4 config ----
 def _old_config_boot():

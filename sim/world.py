@@ -469,6 +469,27 @@ class World:
                 proj["fined"] = True
                 proj["condemn_day"] = day + getattr(config, "CONDEMN_GRACE_DAYS", 2)
                 proposer = self.agents.get(proj.get("proposed_by") or "")
+                # THE WORLD DOES NOT LIE TO THEM. If the wrecking crew has
+                # been retired, the warning cannot threaten a demolition
+                # that is never coming — it says what actually happens.
+                grace = getattr(config, "CONDEMN_GRACE_DAYS", 2)
+                wrecks = getattr(config, "CONDEMN_ENABLED", True)
+                fate_you = (f"Finish it within {grace} days or the town tears "
+                            f"it down." if wrecks else
+                            f"In {grace} days it comes off the notice board "
+                            f"and stays where it is, half-built. Nobody will "
+                            f"tear it down and nobody will chase you about it "
+                            f"again — it will just stand there unfinished for "
+                            f"as long as it stands.")
+                fate_town = (f"Condemnation in {grace} days unless it gets "
+                             f"finished." if wrecks else
+                             f"In {grace} days it comes off the board and is "
+                             f"left standing unfinished.")
+                fate_others = (f"It gets condemned in {grace} days unless "
+                               f"someone finishes it." if wrecks else
+                               f"In {grace} days it comes off the board — it "
+                               f"stays standing at {proj['site']} either way, "
+                               f"and anyone can still work on it.")
                 fine_bit = ""
                 if proposer is not None:
                     fine = getattr(config, "PERMIT_FINE", 10)
@@ -489,31 +510,64 @@ class World:
                         "text": (f"The permit on YOUR project, "
                                  f"{proj['name']}, has expired at "
                                  f"{proj['done']}/{proj['work']} built."
-                                 f"{fine_bit} Finish it within "
-                                 f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days or the "
-                                 f"town tears it down."),
+                                 f"{fine_bit} {fate_you}"),
                         "interrupt": True, "sim_time": self.clock.hhmm,
                     })
                 self.emit("world", None,
                           f"PERMIT EXPIRED: {proj['name']} sits at "
                           f"{proj['done']}/{proj['work']}.{fine_bit} "
-                          f"Condemnation in "
-                          f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days "
-                          f"unless it gets finished.", proj["site"])
+                          f"{fate_town}", proj["site"])
                 for villager in self.agents.values():
                     if villager.name != proj.get("proposed_by"):
                         villager.pending.append({
                             "text": (f"Notice board: the permit on "
                                      f"{proj['name']} has EXPIRED "
                                      f"({proj['done']}/{proj['work']} done). "
-                                     f"It gets condemned in "
-                                     f"{getattr(config, 'CONDEMN_GRACE_DAYS', 2)} days "
-                                     f"unless someone finishes it."),
+                                     f"{fate_others}"),
                             "interrupt": False, "sim_time": self.clock.hhmm,
                         })
                 continue
-            # the wrecking crew
+            # the wrecking crew — or, since v3.5, the shelf
             if proj.get("condemn_day") and day > proj["condemn_day"]:
+                # THE ONE THING THEY RELIABLY DO IS INVENT PROJECTS.
+                #
+                # A fall fair, a cookout, a feast festival, a flea market,
+                # porch lighting, a gazebo, Hope Lighting, and a JOB HUB
+                # built by unemployed people. Nobody prompted any of it. In
+                # a hundred and thirty days it is the only appetite these
+                # villagers have ever shown.
+                #
+                # And three times we tore one down for being slow and fined
+                # the proposer money he did not have. The world's answer to
+                # the only initiative it ever saw was a bulldozer.
+                #
+                # So it stops. The half-built thing STAYS STANDING, in the
+                # world, where anyone can still pick up a hammer. It just
+                # stops holding a slot on the notice board — because the
+                # board is about permits and attention, and a shabby
+                # unfinished structure in the park is about neither.
+                # (Brad, 2026-08-08.)
+                if not getattr(config, "CONDEMN_ENABLED", True):
+                    proj["stalled"] = True
+                    proj["condemn_day"] = None
+                    self.emit("world", None,
+                              f"{proj['name']} is off the notice board at "
+                              f"{proj['done']}/{proj['work']}. Nobody tore it "
+                              f"down. It is still standing at {proj['site']}, "
+                              f"unfinished, and anyone who wants to pick it "
+                              f"back up still can.", proj["site"])
+                    for villager in self.agents.values():
+                        shifts = proj["contributors"].get(villager.name, 0)
+                        villager.pending.append({
+                            "text": (f"{proj['name']} came off the notice "
+                                     f"board unfinished at "
+                                     f"{proj['done']}/{proj['work']}. It is "
+                                     f"still there at {proj['site']}."
+                                     + (f" Your {shifts} shifts are still in "
+                                        f"it." if shifts else "")),
+                            "interrupt": False, "sim_time": self.clock.hhmm,
+                        })
+                    continue
                 self.projects.remove(proj)
                 self.emit("world", None,
                           f"CONDEMNED: the half-built {proj['name']} "
@@ -1056,7 +1110,9 @@ class World:
         name = str(action.get("project") or "").strip()
         if not name:
             return False, "started to propose something, lost the thread"
-        open_count = sum(1 for p in self.projects if not p["complete"])
+        # shelved work still stands in the world but frees the board
+        open_count = sum(1 for p in self.projects
+                         if not p["complete"] and not p.get("stalled"))
         if open_count >= 3:
             return False, ("the notice board is full — three open projects "
                            "already; build one first")

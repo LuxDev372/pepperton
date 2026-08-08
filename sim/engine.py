@@ -781,6 +781,7 @@ class Engine:
             "projects": [
                 {"name": p["name"], "site": p["site"], "done": p["done"],
                  "work": p["work"], "complete": p["complete"],
+                 "stalled": bool(p.get("stalled")),
                  "icon": p.get("icon"),
                  "contributors": p["contributors"]}
                 for p in world.projects

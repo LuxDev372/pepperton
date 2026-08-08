@@ -146,6 +146,20 @@ def decision_prompt(agent, world, perceptions, memories):
                                f"(built by {top}). It EXISTS — never talk about "
                                f"starting or planning it.")
             continue
+        if p.get("stalled"):
+            # shelved, not demolished: it lost its permit and came off the
+            # board, but it is still standing at the site and a hammer still
+            # works on it. Nobody will ever fine or condemn it again.
+            who = ", ".join(f"{n.split()[0]} {c}" for n, c in
+                            sorted(p["contributors"].items(),
+                                   key=lambda kv: -kv[1])) or "NOBODY YET"
+            board_lines.append(
+                f"- ⏸ {p['name']} at {p['site']}: SHELVED at {p['done']}/"
+                f"{p['work']} — off the notice board, no permit, no deadline, "
+                f"nobody is coming to tear it down. It is still standing there "
+                f"half-built and the build action still works on it. "
+                f"Shifts already in it: {who}.")
+            continue
         if p["contributors"]:
             who = ", ".join(f"{n.split()[0]} {c}" for n, c in
                             sorted(p["contributors"].items(), key=lambda kv: -kv[1]))
@@ -156,10 +170,15 @@ def decision_prompt(agent, world, perceptions, memories):
             status = f"0/{p['work']} — not started"
         permit_note = ""
         if getattr(config, "PERMITS_ENABLED", True) and p.get("permit_due"):
-            if p.get("fined"):
+            if p.get("fined") and getattr(config, "CONDEMN_ENABLED", True):
                 permit_note = (f" [PERMIT EXPIRED — CONDEMNED day "
                                f"{p.get('condemn_day')} unless FINISHED; "
                                f"only hammers save it now]")
+            elif p.get("fined"):
+                permit_note = (f" [PERMIT EXPIRED — comes off the board day "
+                               f"{p.get('condemn_day')}. It will still be "
+                               f"standing and still buildable; it just stops "
+                               f"being the town's business]")
             else:
                 permit_note = f" [permit to day {p['permit_due']}]"
         board_lines.append(f"- {p['name']} at {p['site']}: {status} — "

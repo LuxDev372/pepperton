@@ -1116,6 +1116,23 @@ function drawBuilding(name, b, night) {
         ctx.fillStyle = "#f0c98a";
         ctx.fillText(p.icon || "🏛", px - 12, rowY() + 17);
         advance(30);
+      } else if (p.stalled && p.done > 0) {
+        // shelved, not demolished: still standing, still buildable, just
+        // off the notice board. Grey, because nobody is working on it —
+        // not gone, because nobody tore it down.
+        const label = "⏸" + Math.round(100 * p.done / p.work) + "%";
+        ctx.font = "700 12px sans-serif";
+        const lw = ctx.measureText(label).width + 14;
+        ctx.fillStyle = "rgba(28,28,28,0.9)";
+        ctx.strokeStyle = "rgba(150,150,150,0.55)";
+        ctx.lineWidth = 1.5;
+        rr(ctx, px - lw, rowY(), lw, 21, 6);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#b9b9b9";
+        ctx.fillText(label, px - lw / 2, rowY() + 15);
+        advance(lw + 6);
       } else if (p.done > 0) {
         const label = "🔨" + Math.round(100 * p.done / p.work) + "%";
         ctx.font = "700 12px sans-serif";

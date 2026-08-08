@@ -361,6 +361,22 @@ PERMIT_SHIFTS_PER_DAY = 8    # window = max(MIN, work / this), in days
 PERMIT_FINE = 10             # assessed on the proposer at the deadline
 CONDEMN_GRACE_DAYS = 2       # days between the fine and the wrecking crew
 
+# THE SHELF (v3.5). True keeps the original wrecking crew, which is what
+# every town before v3.5 ran, so old configs boot unchanged.
+#
+# Set it False and the crew never comes. A project past its grace days is
+# SHELVED instead of demolished: it comes off the notice board (freeing a
+# slot so people can keep proposing), it can never be fined or condemned
+# again, and it stays standing at its site half-built, with everyone's
+# shifts still in it and the build action still working on it.
+#
+# We run our towns False. In 130 days of Pepperton the only unprompted
+# appetite the villagers ever showed was inventing things to build, and
+# demolishing three of those for being slow is the single most destructive
+# thing we ever did to them. Your town, your call — but that is what we
+# measured.
+CONDEMN_ENABLED = True
+
 # Overheard (untargeted) speech no longer interrupts everyone in the room —
 # it's still perceived, but only being directly addressed demands a response.
 # This is the main brake on runaway talk-chains.
