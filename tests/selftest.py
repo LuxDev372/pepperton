@@ -1395,6 +1395,32 @@ def _review_fixes_v292():
     check("no raw config reads of optional knobs in permit_sweep",
           "config.CONDEMN_GRACE_DAYS" not in src, "")
 
+    # 6b. THE SUITE MUST RUN ON A STRANGER'S MACHINE (v3.6.1). One line
+    # imported server.app purely to read its source, and dragged fastapi in
+    # with it — so the whole harness died on any box without a web
+    # framework. A reviewer hit it and got no further. The sim does not need
+    # fastapi to be correct and neither does the proof of it.
+    # Read the parse tree, not the text — the same trap as the shutdown
+    # check above, and this test walked straight into it by matching its own
+    # source on the first run.
+    import glob as _glob
+    import ast as _ast
+    BANNED = ("server", "fastapi", "uvicorn", "starlette")
+    offenders = []
+    for path in _glob.glob(os.path.join(ROOT, "tests", "*.py")):
+        tree = _ast.parse(open(path, encoding="utf-8").read())
+        for node in _ast.walk(tree):
+            names = []
+            if isinstance(node, _ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, _ast.ImportFrom):
+                names = [node.module or ""]
+            for n in names:
+                if n.split(".")[0] in BANNED:
+                    offenders.append(f"{os.path.basename(path)}: {n}")
+    check("the test suite imports no web framework, directly or otherwise",
+          not offenders, "; ".join(offenders))
+
     # 7. durable store resources can be released (Windows harness gap)
     e = Engine(seed=90)
     worldmod.World.close_all()
@@ -1829,8 +1855,16 @@ def _experiment_ledger():
     # never ran and every run stayed "running" forever. The ledger exists so
     # a run cannot lie about itself afterward; a run that cannot say it
     # finished is doing exactly that.
-    import server.app as appmod
-    src = open(appmod.__file__, encoding="utf-8").read()
+    # READ THE FILE, DO NOT IMPORT IT (v3.6.1). This check only ever wanted
+    # server/app.py's source text — but importing the module dragged in
+    # fastapi, so the entire suite refused to run on any machine without a
+    # web framework installed. An external reviewer hit exactly that and got
+    # no further than the dependency error. A test harness that cannot run
+    # on a stranger's machine is not a harness, and the sim has never needed
+    # fastapi to be correct.
+    app_path = os.path.join(ROOT, "server", "app.py")
+    with open(app_path, encoding="utf-8") as _f:
+        src = _f.read()
     check("the server closes the books on the way out",
           'on_event("shutdown")' in src and "engine.stop()" in src, "")
     # Read the parse tree, not the text: the docstring above this handler
