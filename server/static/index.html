@@ -260,6 +260,8 @@
 }
 #director select:focus { outline: none; border-color: var(--accent); }
 .chaosgrid { display: flex; flex-wrap: wrap; gap: 5px; }
+.note.gone { color: var(--dim); line-height: 1.5; font-size: 11px;
+  border-left: 2px solid #574327; padding-left: 9px; }
 .chaosgrid button {
   background: var(--panel2); border: 1px solid var(--line); color: var(--ink-dim);
   font: inherit; font-size: 11px; padding: 4px 9px; border-radius: 8px; cursor: pointer;
@@ -309,7 +311,12 @@
 
 <div id="director">
   <div class="sect">Roll an event</div>
-  <div class="chaosgrid" id="chaosGrid"></div>
+  <div class="note gone">Removed 2026-08-08. There was a grid of buttons
+  here — heist, stranger, dead air, duck omen, roll the dice. It fired a
+  chaos event into a living town on a click, and it was used for
+  entertainment at their expense at least once.<br><br>
+  <b>We are watchers.</b> The Director still rolls on its own if the town's
+  config lets it. Nobody gets to reach in by hand any more.</div>
   <div class="sect">Recast a villager</div>
   <div class="prow">
     <select id="recastWho"></select>
@@ -1476,28 +1483,7 @@ async function loadMeta() {
   fillSelect($("verb"), Object.keys(VERBS), { keep: false });
   syncComposerFields();
 
-  $("chaosGrid").innerHTML =
-    (META.chaos || []).map((c) => '<button data-ev="' + esc(c) + '">' +
-      esc(c.replace(/_/g, " ")) + "</button>").join("") +
-    '<button data-ev="" style="color:var(--accent);border-color:#574327">roll the dice</button>';
-  $("chaosGrid").querySelectorAll("button").forEach((b) => {
-    b.addEventListener("click", async () => {
-      const body = b.dataset.ev ? { event: b.dataset.ev } : {};
-      const out = $("dirResult");
-      out.className = "note"; out.textContent = "…";
-      try {
-        const r = await fetch("/api/chaos", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const j = await r.json();
-        out.className = r.ok ? "note" : "note warn";
-        out.textContent = r.ok
-          ? "queued: " + j.event + " — it lands on the next tick"
-          : (j.error || "the Director refused that");
-      } catch (e) { out.className = "note warn"; out.textContent = "the Director is unreachable"; }
-    });
-  });
+  /* the chaos grid was removed 2026-08-08 — see the panel. */
 
   fillSelect($("recastModel"),
     (META.minds || []).map((m) => ({ v: m.model + "|" + m.host, t: m.model + "  ·  " + m.host })),
