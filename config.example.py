@@ -560,6 +560,25 @@ MEMORY_TOP_K = 8
 MEMORY_WEIGHTS = {"recency": 1.0, "importance": 1.0, "relevance": 1.2}
 MEMORY_RECENCY_HALFLIFE_TICKS = 96   # one sim day
 
+# WHAT A VILLAGER CAN STILL REACH (v3.6).
+#
+# MEMORY_WINDOW is recency: candidates are the last N things that happened
+# to you. 400 was hardcoded until v3.6 and is kept as the code default so
+# old towns behave exactly as they always have. It is roughly two to four
+# sim-days of life; everything older stays in the database forever and can
+# never be retrieved again, however important it was.
+#
+# MEMORY_KEEPSAKES is a second pool: the most important moments of a whole
+# life, reachable no matter how long ago they happened. Not more memory —
+# a different shape of it. The big things stay with you; the small things
+# fade. SHIPS DARK AT 0; turning it on is a real change to who these
+# villagers are, and it cannot be un-rung. Ours run 40.
+#
+# Watch what it costs you: both pools are scored in Python every time a
+# villager thinks, so a very large window is CPU you pay on every tick.
+MEMORY_WINDOW = 400
+MEMORY_KEEPSAKES = 0
+
 # ------------------------------------------------------------------ the road
 # One verb and a mailbox (v3.4). While a coach is standing in the plaza with
 # a destination on its side, `travel` appears in the action list. Board it and

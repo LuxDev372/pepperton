@@ -161,15 +161,57 @@ class MemoryStore:
         ]
 
     def retrieve(self, agent, query, now_tick, k=None):
-        """Top-k memories by recency + importance + keyword relevance."""
+        """Top-k memories by recency + importance + keyword relevance.
+
+        CANDIDATES COME FROM TWO POOLS (v3.6).
+
+        Until v3.6 there was one pool and it was a bare `LIMIT 400`,
+        hardcoded — the only late knob in the codebase with no `getattr`
+        default, which is the v2.4.1 law broken in the file nobody re-read.
+        It meant a villager's reachable past was the last 400 things that
+        happened to them: two to four sim-days. Everything older stayed in
+        the database forever and could never be retrieved again, no matter
+        how important it was.
+
+        Nora Tibbs could not remember the bank taking her house. Pompeii
+        spent Day 124 investigating the disappearance of a building the
+        town itself had condemned on Day 106 — nobody left who could reach
+        the memory, so they treated the hole as a mystery. (claude/DAY131.md)
+
+        So: `window` is recency — the last N things, which fade. And
+        `keepsakes` is the small set of most-important memories of a whole
+        life, which do not. Big things stay with you; small things go.
+
+        KEEPSAKES SHIPS DARK (0). At 0 this is byte-identical to v3.5 and
+        the golden hash must not move.
+        """
         k = k or config.MEMORY_TOP_K
         query_tokens = _tokens(query)
+        window = max(1, int(getattr(config, "MEMORY_WINDOW", 400)))
+        keepsakes = max(0, int(getattr(config, "MEMORY_KEEPSAKES", 0)))
+        cols = ("SELECT id, day, sim_time, kind, text, importance, tick "
+                "FROM memories WHERE agent=? AND world_id=?")
         with self._lock:
             rows = self._conn.execute(
-                "SELECT day, sim_time, kind, text, importance, tick FROM memories"
-                " WHERE agent=? AND world_id=? ORDER BY tick DESC LIMIT 400",
-                (agent, self.world_id),
+                cols + " ORDER BY tick DESC LIMIT ?",
+                (agent, self.world_id, window),
             ).fetchall()
+            if keepsakes:
+                # the unforgettable: highest importance of an entire life,
+                # regardless of how long ago. Ties break toward the older
+                # one — the first time something happened to you.
+                rows = list(rows) + self._conn.execute(
+                    cols + " ORDER BY importance DESC, tick ASC LIMIT ?",
+                    (agent, self.world_id, keepsakes),
+                ).fetchall()
+        seen = set()
+        deduped = []
+        for r in rows:
+            if r[0] in seen:
+                continue
+            seen.add(r[0])
+            deduped.append(r[1:])
+        rows = deduped
         weights = config.MEMORY_WEIGHTS
         halflife = config.MEMORY_RECENCY_HALFLIFE_TICKS
         scored = []

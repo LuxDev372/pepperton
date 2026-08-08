@@ -51,6 +51,8 @@ LATE_KNOBS = {
     "HIRING_ENABLED": True,
     "CONDEMN_GRACE_DAYS": 3,
     "CONDEMN_ENABLED": True,
+    "MEMORY_WINDOW": 400,
+    "MEMORY_KEEPSAKES": 0,
     "FORECLOSURE": {},
     "BUS": {},
     "LOYALTY": {},
@@ -641,6 +643,72 @@ def _the_shelf():
         fresh_data()
 
 _the_shelf()
+
+# ---- v3.6: what a villager can still reach ----
+def _keepsakes():
+    fresh_data()
+    from sim.memory import MemoryStore
+    _w, _had_w = snapshot_flag("MEMORY_WINDOW")
+    _k, _had_k = snapshot_flag("MEMORY_KEEPSAKES")
+    try:
+        mem = MemoryStore(db_path="data/_keepsake_test.db", world_id="kt")
+        # one enormous thing, long ago...
+        mem.add("Nora", 1, 1, "08:00", "event",
+                "the bank took my house and I have nowhere to sleep", 10)
+        # ...buried under a thousand forgettable days
+        for i in range(1000):
+            mem.add("Nora", 100 + i, 2 + i // 96, "12:00", "event",
+                    f"another quiet afternoon, nothing much happened {i}", 2)
+
+        # the old behaviour: a small window cannot see past itself
+        config.MEMORY_WINDOW = 400
+        config.MEMORY_KEEPSAKES = 0
+        got = mem.retrieve("Nora", "house home sleep", 1200, k=8)
+        check("a short window cannot reach the thing that mattered",
+              not any("the bank took my house" in m["text"] for m in got),
+              f"{len(got)} memories, none of them the foreclosure")
+
+        # keepsakes ON: importance outranks how long ago it was
+        config.MEMORY_KEEPSAKES = 40
+        got = mem.retrieve("Nora", "house home sleep", 1200, k=8)
+        check("KEEPSAKES: she can remember losing the house",
+              any("the bank took my house" in m["text"] for m in got),
+              f"{len(got)} memories retrieved")
+        check("...and it is not retrieved twice",
+              len([m for m in got
+                   if "the bank took my house" in m["text"]]) == 1, "")
+        check("...and it does not crowd out the recent past",
+              any("another quiet afternoon" in m["text"] for m in got), "")
+        check("the retriever still returns at most TOP_K",
+              len(got) <= 8, f"{len(got)}")
+        check("and still hands them over oldest-first",
+              [m["tick"] for m in got] == sorted(m["tick"] for m in got), "")
+
+        # a wider window reaches it without keepsakes at all
+        config.MEMORY_KEEPSAKES = 0
+        config.MEMORY_WINDOW = 5000
+        got = mem.retrieve("Nora", "house home sleep", 1200, k=8)
+        check("a wide enough window reaches it the slow way",
+              any("the bank took my house" in m["text"] for m in got), "")
+        mem.close()
+
+        # the knob obeys the v2.4.1 law: absent from config, code default
+        if hasattr(config, "MEMORY_WINDOW"):
+            delattr(config, "MEMORY_WINDOW")
+        if hasattr(config, "MEMORY_KEEPSAKES"):
+            delattr(config, "MEMORY_KEEPSAKES")
+        mem2 = MemoryStore(db_path="data/_keepsake_test2.db", world_id="kt")
+        mem2.add("Sam", 1, 1, "08:00", "event", "a thing happened", 5)
+        ok = mem2.retrieve("Sam", "thing", 2, k=8)
+        check("memory retrieval boots on a config that never heard of it",
+              len(ok) == 1, f"{len(ok)}")
+        mem2.close()
+    finally:
+        restore_knob("MEMORY_WINDOW", _w, _had_w)
+        restore_knob("MEMORY_KEEPSAKES", _k, _had_k)
+        fresh_data()
+
+_keepsakes()
 
 # ---- v2.4.1 regression: v2.4 must boot on a pre-2.4 config ----
 def _old_config_boot():
