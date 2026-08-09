@@ -14,6 +14,10 @@ import config
 
 _WORD = re.compile(r"[a-z']+")
 
+# Every store this process has opened, so a harness can close strays it
+# never had a reference to. See MemoryStore.close_all (v3.8.6).
+_OPEN_STORES = []
+
 
 def _tokens(text):
     return set(_WORD.findall(text.lower()))
@@ -24,7 +28,9 @@ class MemoryStore:
         self.path = db_path or config.DB_PATH
         self.world_id = world_id
         self._lock = threading.Lock()
+        self._closed = False
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        _OPEN_STORES.append(self)
         self._conn.execute(
             """CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,4 +251,35 @@ class MemoryStore:
 
     def close(self):
         with self._lock:
+            if self._closed:
+                return
+            self._closed = True
             self._conn.close()
+        try:
+            _OPEN_STORES.remove(self)
+        except ValueError:
+            pass
+
+    @staticmethod
+    def close_all():
+        """Close every MemoryStore this process opened. (v3.8.6)
+
+        World.close_all() walks _OPEN_WORLDS, so it only ever knew about
+        stores reached through a World. A test that opens a bare
+        MemoryStore — as the memory-volume characterisation test does, on
+        purpose, because it is testing retrieval and not a town — left an
+        sqlite handle open that nothing in the process could see.
+
+        POSIX unlinks open files without complaint, so the suite passed
+        here and died on Windows with [WinError 32] when the next
+        fresh_data() tried to remove data/, taking every check after it
+        down. Same family as the v3.3.1 transcript handle, through a path
+        that did not exist when that was fixed. (Found by review, v3.8.6.)
+
+        A registry rather than a fix to one caller: the next bare store
+        somebody opens is swept without them having to know this happened."""
+        for store in list(_OPEN_STORES):
+            try:
+                store.close()
+            except Exception:
+                pass

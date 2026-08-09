@@ -153,6 +153,9 @@ class World:
         this before wiping data/."""
         for world in list(_OPEN_WORLDS):
             world.close()
+        # ...and any bare MemoryStore nobody registered a World for (v3.8.6)
+        from sim.memory import MemoryStore
+        MemoryStore.close_all()
 
     # ------------------------------------------------------------ helpers
     def occupants(self, loc, exclude=None):

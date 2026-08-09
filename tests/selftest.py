@@ -2564,12 +2564,25 @@ def _seven_hours():
     We shipped that fix, tested it, armed it, and it has never once changed
     what a villager thinks about. (claude/WHY-THE-DOORS-STAY-SHUT.md)
 
-    This test exists so that stops being true loudly rather than quietly."""
+    This test exists so that stops being true loudly rather than quietly.
+
+    CLOSE THE STORE (v3.8.6). This is the only test in the suite that opens
+    a bare MemoryStore instead of going through World/TownStore, so
+    World.close_all() — which walks _OPEN_WORLDS — has no idea it exists.
+    Its sqlite handle stayed open across fresh_data(), and on Windows
+    shutil.rmtree("data") then dies with [WinError 32], taking every check
+    after this one down with it. POSIX happily unlinks open files, so the
+    suite passed here and failed there.
+
+    Same family as the v3.3.1 transcript-handle bug, reintroduced through a
+    path that did not exist when that one was fixed. (Found by review,
+    v3.8.6.)"""
     # snapshot_knob() copies dicts; these two are plain ints
     ow, had_w = getattr(config, "MEMORY_WINDOW", None), \
         hasattr(config, "MEMORY_WINDOW")
     ok_, had_k = getattr(config, "MEMORY_KEEPSAKES", None), \
         hasattr(config, "MEMORY_KEEPSAKES")
+    store = None
     try:
         config.MEMORY_WINDOW = 1200        # Pepperton's live setting
         config.MEMORY_KEEPSAKES = 40       # Pepperton's live setting
@@ -2605,6 +2618,8 @@ def _seven_hours():
               f"importance 10, {store.count('Nora'):,} rows deep, "
               f"MEMORY_KEEPSAKES={config.MEMORY_KEEPSAKES}")
     finally:
+        if store is not None:
+            store.close()      # nothing else in the process knows it exists
         restore_knob("MEMORY_WINDOW", ow, had_w)
         restore_knob("MEMORY_KEEPSAKES", ok_, had_k)
     World.close_all()
@@ -2756,6 +2771,16 @@ def _one_town_one_process():
           f"dead PID {dead.pid} cleared")
     took_over.close()
     check("closing a town releases its claim", not os.path.exists(lockpath), "")
+
+    # v3.8.6: a bare store nobody holds a World for must still be swept
+    from sim.memory import MemoryStore as _MS, _OPEN_STORES as _OS
+    stray = _MS(config.DB_PATH, world_id="stray")
+    check("a bare MemoryStore registers itself", stray in _OS, "")
+    World.close_all()
+    check("...and World.close_all() sweeps it — [WinError 32] cannot recur",
+          stray not in _OS and stray._closed,
+          "the handle no other object in the process knew about")
+    stray.close()          # idempotent by design
 
     old, had_old = getattr(config, "TOWN_LOCK", None), hasattr(config, "TOWN_LOCK")
     try:
