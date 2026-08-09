@@ -856,6 +856,21 @@ class Engine:
         self.exp.note_decision(src, day=self.world.clock.day)
         was = getattr(agent, "last_source", None)
         agent.last_source = src
+        # A MIND THAT WAS NEVER UP MUST STILL ANNOUNCE ITSELF (v3.8).
+        # This used to fire only on a CHANGE, so a villager who came back
+        # from a restart already understudied went straight to `understudy`
+        # with nothing to compare against — and run.log said nothing at all.
+        # Hazel Pike ran as a script for fourteen days, voided a whole
+        # window, and the loudest instrument we own was silent about it,
+        # because silence was indistinguishable from health. Again.
+        # Not in MOCK_MODE: a deliberately scripted town is not a surprise,
+        # and the mode badge already says so. This warning is for a town
+        # that believes it has live minds and does not.
+        if was is None and src != "model" \
+                and not getattr(config, "MOCK_MODE", False):
+            print(f"[MINDS] {agent.name}: came up as {src.upper()} — "
+                  f"{agent.model}@{agent.host} never answered. Anything "
+                  f"this villager does is NOT evidence.", flush=True)
         if was is not None and was != src:
             # a mind going dark or coming back is worth a line in run.log —
             # it is the difference between a finding and an artifact
@@ -958,6 +973,13 @@ class Engine:
             "turned_away_today": len(
                 set(getattr(world, "turned_away_today", ()))
                 - set(getattr(world, "worked_today", ()))),
+            # STRANGERS WHO TRIED A DOOR AND LEFT WITH THEIR MONEY (v3.8).
+            # The number the Townsfolk experiment is actually about, and
+            # until now it was counted by nothing. Distinct from the line
+            # above, which is villagers refused a shift by their own
+            # employer. Two different failures; two different counters.
+            "customers_turned_away_today": getattr(
+                world, "customers_turned_away_today", 0),
             "longest_absence": max(
                 [world.absence_streaks.get(a.name, 0) for a in employed],
                 default=0),

@@ -109,6 +109,10 @@ class World:
         self.absence_streaks = {}
         self.work_streaks = {}      # the Crane Bonus: absence's mirror
         self.turned_away_today = set()   # showed up; the town couldn't pay
+        # money that walked into town and walked back out again (v3.8) —
+        # a stranger who tried a door, found it shut, and left. Counted at
+        # the door, not at the narration.
+        self.customers_turned_away_today = 0
         # Took a townsperson's odd job. EARNED money, but did NOT open their
         # own door — tracked apart from worked_today, because conflating the
         # two let an employed villager launder a no-show into a perfect
@@ -329,6 +333,7 @@ class World:
             return
         self._bell_day_done = day
         self.worked_today = set()
+        self.customers_turned_away_today = 0
         self.turned_away_today = set()
         self.odd_jobs_today = set()
         self.earned_today = {}

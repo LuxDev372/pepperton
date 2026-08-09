@@ -769,6 +769,109 @@ def _per_day_provenance():
 
 _per_day_provenance()
 
+# ---- v3.8: three instruments that were silent. (claude/WINDOW3-VOID.md) ----
+def _instruments_v38():
+    fresh_data()
+    _t, _had_t = snapshot_knob("TOWNSFOLK")
+    try:
+        # 1. A MIND THAT WAS NEVER UP MUST ANNOUNCE ITSELF.
+        # Hazel Pike came back from a restart already understudied, so her
+        # source went straight to "understudy" with nothing to compare
+        # against, and run.log said NOTHING for fourteen days.
+        import io, contextlib
+        # the warning is deliberately silent in MOCK_MODE, so this block
+        # must force the state it asserts (the v3.3.2 rule)
+        _m = getattr(config, "MOCK_MODE", False)
+        _had_m = hasattr(config, "MOCK_MODE")
+        config.MOCK_MODE = False
+        e = Engine(seed=61)
+        a = list(e.world.agents.values())[0]
+        a.last_source = None
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            e._record_provenance(a, "host unreachable; understudy acted: x")
+        first = buf.getvalue()
+        check("a mind that was NEVER up still announces itself",
+              "[MINDS]" in first and a.name in first
+              and "NOT evidence" in first, first.strip()[:70])
+
+        # a villager who comes up healthy stays quiet — no roll-call spam
+        b = list(e.world.agents.values())[1]
+        b.last_source = None
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            e._record_provenance(b, "model decision")
+        check("...but a healthy first decision says nothing",
+              "[MINDS]" not in buf2.getvalue(), buf2.getvalue()[:60])
+
+        # and a real transition still logs, as it always did
+        buf3 = io.StringIO()
+        with contextlib.redirect_stdout(buf3):
+            e._record_provenance(b, "host unreachable; understudy acted: x")
+        check("a mind going dark mid-run still logs",
+              "[MINDS]" in buf3.getvalue(), "")
+        restore_knob("MOCK_MODE", _m, _had_m)
+        check("the warning stays silent in a deliberately mocked town",
+              getattr(config, "MOCK_MODE", False) is True, "MOCK_MODE restored")
+
+        # 2. MONEY THAT WALKED BACK OUT OF TOWN IS COUNTED.
+        w = e.world
+        check("the customer counter starts at zero",
+              w.customers_turned_away_today == 0, "")
+        w.customers_turned_away_today = 3
+        w.turned_away_today.add("Somebody Else")
+        v = e.vitals()
+        check("strangers turned away at a shut door are counted",
+              v["customers_turned_away_today"] == 3,
+              str(v.get("customers_turned_away_today")))
+        check("...and are NOT confused with villagers refused a shift",
+              v["turned_away_today"] == 1, str(v["turned_away_today"]))
+        w.clock.day += 1
+        w._bell_day_done = 0
+        w.morning_bell()
+        check("both counters reset with the day",
+              w.customers_turned_away_today == 0
+              and not w.turned_away_today, "")
+
+        # 3. ADMISSIBILITY IS READABLE WITHOUT A TERMINAL.
+        exp = e.exp
+        exp.open_run(e)
+        for _ in range(5):
+            exp.note_decision("model", day=7)
+        exp.note_decision("understudy", day=8)
+        exp.note_decision("model", day=8)
+        check("clean_days names only the certifiable day",
+              exp.clean_days() == [7], str(exp.clean_days()))
+        check("a run with a clean day is admissible",
+              bool(exp.clean_days()), "")
+        # the shape the endpoint serves
+        payload = {"clean_days": exp.clean_days(),
+                   "admissible": bool(exp.clean_days()),
+                   "day_requested": exp.day_integrity(8)}
+        check("and a dirty day reports itself as dirty",
+              payload["day_requested"]["clean"] is False
+              and payload["day_requested"]["understudy"] == 1, "")
+
+        # the endpoint must exist and must not be async-blocking the loop
+        import ast as _a
+        src = open(os.path.join(ROOT, "server", "app.py"),
+                   encoding="utf-8").read()
+        routes = [d.args[0].value for n in _a.walk(_a.parse(src))
+                  if isinstance(n, (_a.FunctionDef, _a.AsyncFunctionDef))
+                  for d in n.decorator_list
+                  if isinstance(d, _a.Call) and d.args
+                  and isinstance(d.args[0], _a.Constant)]
+        check("the integrity line is readable over HTTP",
+              "/api/experiment" in routes,
+              "an integrity line you must walk across the room for is one "
+              "nobody checks")
+        World.close_all()
+    finally:
+        restore_knob("TOWNSFOLK", _t, _had_t)
+        fresh_data()
+
+_instruments_v38()
+
 # ---- v3.6.3: the road must not eat people. (Found by review.) ----
 def _road_collision():
     fresh_data()

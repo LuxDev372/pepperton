@@ -218,6 +218,18 @@ class Townsfolk:
                                f"tried the door at {here}, found it shut, "
                                f"and walked off with their money still in "
                                f"their pocket", here)
+                # COUNT IT (v3.8). The vitals strip read `turned_away: 0`
+                # through an afternoon in which five strangers tried five
+                # doors and left with their wallets — because that counter
+                # has only ever meant "villagers refused a shift by an
+                # insolvent employer". Money walking back out of town, which
+                # is the entire point of the Townsfolk experiment, was
+                # counted by nothing we owned.
+                #
+                # Counted here, at the door, whether or not the event was
+                # emitted — the quiet window suppresses the NARRATION, and
+                # a fact that only exists when it is narrated is not a fact.
+                world.customers_turned_away_today += 1
             # tried it, open or shut — now go somewhere else, like a person
             if not person.get("fixed"):
                 elsewhere = [p for p in (world.public_locations() or [here])

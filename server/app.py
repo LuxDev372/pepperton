@@ -117,6 +117,46 @@ async def recast(body: dict):
             "queued": True}
 
 
+@app.get("/api/experiment")
+async def experiment(day: int = None):
+    """Is this run's evidence admissible, and on which days? (v3.8)
+
+    THE RULE THIS EXISTS FOR: do not open a window until clean_days() has
+    returned at least one day. Window 3 was opened without checking, ran
+    sixteen days at ~84% live because one villager could not fit on a
+    graphics card, and was void from the first tick. Nobody could tell,
+    because reading the ledger meant sitting at the machine with a Python
+    prompt — so nobody read it.
+
+    An integrity line you have to walk across the room for is an integrity
+    line nobody checks. (claude/WINDOW3-VOID.md)
+    """
+    exp = getattr(engine, "exp", None)
+    if exp is None or not getattr(exp, "run", None):
+        return {"run": None, "note": "no run open yet — the ledger opens "
+                                     "on the first tick"}
+    run = exp.run
+    clean = exp.clean_days()
+    out = {
+        "run_id": run.get("run_id"),
+        "town": run.get("town"),
+        "code_version": run.get("code_version"),
+        "seed": run.get("seed"),
+        "mock_mode": run.get("mock_mode"),
+        "opened_day": run.get("opened_day"),
+        "ended_reason": run.get("ended_reason"),
+        "interventions": len(run.get("interventions") or []),
+        "integrity": exp.integrity(),
+        "clean_days": clean,
+        "clean_day_count": len(clean),
+        "today": exp.day_integrity(engine.world.clock.day),
+        "admissible": bool(clean),
+    }
+    if day is not None:
+        out["day_requested"] = exp.day_integrity(day)
+    return out
+
+
 @app.get("/api/casts")
 async def casts():
     """What minds and providers this town can draw on — so a control panel
