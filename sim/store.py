@@ -96,9 +96,70 @@ class TownStore:
 
     @staticmethod
     def _alive(pid):
+        """Is this PID a live process? Cross-platform. (v3.8.4)
+
+        v3.8.3 asked `os.kill(pid, 0)` and treated "did not raise" as alive.
+        That is correct on POSIX and WRONG ON WINDOWS, where os.kill does
+        not raise for a dead PID — so the stale-lock branch could never run
+        and EVERY restart of a town found the last run's lockfile, decided
+        the corpse was alive, and refused to start. Forever, until a human
+        deleted .town.lock by hand. The guard built so a town could never be
+        run twice became a guard that stopped it running at all.
+
+        It also took the test suite down with it: an unhandled RuntimeError
+        out of _claim_town killed every check after it. (Found by review,
+        v3.8.4 — verified on Windows, not theorised.)
+
+        The second bug in those six lines was ours alone and nobody
+        reported it: PermissionError was folded in with "dead". On POSIX
+        that error means the process EXISTS and belongs to somebody else —
+        the single most dangerous case, because we would then take over the
+        lock of a town that is very much running. It is now ALIVE.
+
+        Windows has no signals, so we ask the kernel directly. STILL_ACTIVE
+        (259) is famously ambiguous — a process that exits with code 259
+        reads as running — and we accept that: erring toward "alive" costs
+        a manual unlock, erring toward "dead" costs a double-run, and we
+        have seen what a double-run costs."""
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        if os.name == "nt":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                STILL_ACTIVE = 259
+                ERROR_ACCESS_DENIED = 5
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                handle = k32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                if not handle:
+                    # access denied means it exists and is not ours to
+                    # inspect; anything else means there is no such process
+                    return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+                try:
+                    code = wintypes.DWORD()
+                    if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                        return True     # it is there; we just cannot ask
+                    return code.value == STILL_ACTIVE
+                finally:
+                    k32.CloseHandle(handle)
+            except Exception:
+                # no ctypes, or an unexpected kernel refusal: assume alive.
+                # A town that will not start is a bad afternoon. A town that
+                # starts twice is four hours of erased memories.
+                return True
         try:
             os.kill(pid, 0)
-        except (OSError, ProcessLookupError, PermissionError, TypeError):
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True          # exists, owned by somebody else
+        except OSError:
             return False
         return True
 

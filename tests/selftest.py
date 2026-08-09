@@ -2708,20 +2708,40 @@ def _one_town_one_process():
           same is not None, "in-process is not the shape that corrupts")
     same.close()
 
-    # a foreign, LIVE pid: PID 1 always exists and is never us
-    with open(lockpath, "w") as f:
-        _json.dump({"pid": 1, "town": "Pepperton",
-                    "opened_utc": "2026-08-09T19:43:00Z"}, f)
+    # A GENUINELY LIVE FOREIGN PROCESS.
+    #
+    # v3.8.3 faked this with PID 1 — "always exists and is never us", which
+    # is true of init on POSIX and means nothing on Windows, where PID 1 is
+    # not reserved. Three assertions here were passing for the wrong reason
+    # on one platform and failing on another. So: spawn a real process, keep
+    # it alive for the duration, and reap it. Same shape the stale half of
+    # this test already used correctly. (Found by review, v3.8.4.)
+    alive = _sp.Popen([sys.executable, "-c",
+                       "import sys, time; sys.stdin.readline()"],
+                      stdin=_sp.PIPE)
     refused = None
     try:
-        TownStore(world_id="lock-c")
-    except RuntimeError as exc:
-        refused = str(exc)
+        check("...and the harness can see its own live decoy",
+              TownStore._alive(alive.pid), f"PID {alive.pid}")
+        with open(lockpath, "w") as f:
+            _json.dump({"pid": alive.pid, "town": "Pepperton",
+                        "opened_utc": "2026-08-09T19:43:00Z"}, f)
+        try:
+            TownStore(world_id="lock-c")
+        except RuntimeError as exc:
+            refused = str(exc)
+    finally:
+        try:
+            alive.stdin.close()
+            alive.wait(timeout=10)
+        except Exception:
+            alive.kill()
+            alive.wait()
     check("A SECOND PROCESS IS REFUSED — the Day 157 failure is now impossible",
           refused is not None, "")
     check("...and the refusal names the PID to go and stop",
-          bool(refused) and "PID 1" in refused,
-          (refused or "")[:60])
+          bool(refused) and f"PID {alive.pid}" in refused,
+          (refused or "")[:64])
     check("...and does not tell you to kill -9 it",
           bool(refused) and "never -9" in refused, "")
 
