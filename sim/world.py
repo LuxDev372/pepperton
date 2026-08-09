@@ -87,6 +87,12 @@ class World:
         self.store = store or TownStore(world_id=world_id)
         self.clock = Clock()
         self.tick_no = 0
+        # v3.9.4 — verbs villagers reached for that do not exist. In memory
+        # only: never serialised, never in a snapshot, never shown to a
+        # villager. See _verb_idle.
+        self.unknown_verbs = {}
+        self.unknown_verb_actors = {}
+        self.unknown_verbs_overflow = 0
         self.agents = {a.name: a for a in cast}
         self.locations = dict(config.LOCATIONS)
         for a in cast:
@@ -1572,7 +1578,37 @@ class World:
 
 
     def _verb_idle(self, agent, action):
-        # think / anything unrecognized: pass the time, visibly
+        """think / anything unrecognized: pass the time, visibly.
+
+        COUNT WHICH ROAD GOT HERE (v3.9.4).
+
+        `execute()` dispatches on `_VERB_HANDLERS.get(act, _verb_idle)` — a
+        bare dict lookup with a default. So this handler is reached two
+        completely different ways and, until now, said the same sentence for
+        both: a villager who CHOSE to rest, and a villager who named a verb
+        this world does not have and was silently converted into resting.
+
+        For 190 days nobody counted the second kind. `passed the time` reads
+        like somebody sitting in the sun; it may be the sound of somebody
+        hitting a wall, and in this log they are the same line.
+
+        THIS COUNTS. IT DOES NOT FIX. No verb is added, no wording changes,
+        nothing a villager can see is touched — the tally is operator-facing
+        only, and deliberately NOT persisted into world state, so it cannot
+        reach the golden hash. If the counts come back full of `open` and
+        `serve`, that is an argument for a pre-registration, not a patch.
+        (claude/THE-UNCOUNTED-VERBS.md)"""
+        act = self._verb_key(action).strip()
+        if act and act != "idle" and act not in self._VERB_HANDLERS:
+            # Bounded, because a degenerate model can invent a new verb every
+            # tick forever. NOT SILENTLY: anything dropped is counted, so the
+            # tally can never read as complete when it is not.
+            key = act if len(act) <= 48 else act[:47] + "\u2026"
+            if key in self.unknown_verbs or len(self.unknown_verbs) < 200:
+                self.unknown_verbs[key] = self.unknown_verbs.get(key, 0) + 1
+                self.unknown_verb_actors.setdefault(key, set()).add(agent.name)
+            else:
+                self.unknown_verbs_overflow += 1
         note = (action.get("note") or action.get("text") or "passed the time").strip()
         agent.activity = {"type": "idle", "until_tick": self.tick_no + 4, "note": note}
         self.emit("action", agent.name, note, agent.location, deliver=False)
@@ -1645,10 +1681,31 @@ class World:
         "buy": _verb_buy, "travel": _verb_travel,
     }
 
+    @staticmethod
+    def _verb_key(action):
+        """The dispatch key for an action, ALWAYS hashable. (v3.9.4)
+
+        A MALFORMED VERB USED TO KILL THE TOWN. `_VERB_HANDLERS.get(act)`
+        raises TypeError on an unhashable key, and nothing between here and
+        `Engine.step()` catches it — so a villager emitting
+        `{"action": {"build": "the pool"}}`, which is an ordinary way for a
+        model to malform that JSON, took the whole town down with it.
+
+        The design already says "anything unrecognized idles." A dict is
+        unrecognized. It should idle. This makes the sentence true for every
+        input rather than for the inputs we happened to imagine.
+
+        Ships dark by definition: no valid action reaches this branch, and
+        the golden hash does not move."""
+        act = (action or {}).get("action", "idle")
+        if isinstance(act, str):
+            return act
+        return f"<{type(act).__name__}>"
+
     def execute(self, agent, action):
         """Validate and apply a brain's chosen action. Returns (ok, summary).
         Every verb gets its own handler; anything unrecognized idles."""
-        act = (action or {}).get("action", "idle")
+        act = self._verb_key(action)
         agent.last_action = action
         handler = self._VERB_HANDLERS.get(act, World._verb_idle)
         return handler(self, agent, action)

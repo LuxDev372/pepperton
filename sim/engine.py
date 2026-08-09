@@ -1017,6 +1017,8 @@ class Engine:
             "poor_box": round(world.tills.get(
                 getattr(config, "POOR_BOX", "the poor box"), 0.0), 2),
             "minds": self.minds_report(),
+            # v3.9.4 — operator-facing only; see World._verb_idle
+            "unknown_verbs": dict(getattr(self.world, "unknown_verbs", {})),
             "flags": self.flags(),
         }
 
@@ -1045,6 +1047,17 @@ class Engine:
         what gets a line of its own instead of a line in a log."""
         world = self.world
         out = []
+        # VERBS THEY REACHED FOR AND WE NEVER BUILT (v3.9.4). Loudest first.
+        # This is the only place the tally appears; villagers cannot read it.
+        unknown = getattr(world, "unknown_verbs", None)
+        if unknown:
+            top = sorted(unknown.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+            line = "UNRECOGNIZED VERBS: " + ", ".join(
+                f"{verb} x{n}" for verb, n in top)
+            dropped = getattr(world, "unknown_verbs_overflow", 0)
+            if dropped:
+                line += f" (+{dropped} beyond the 200-verb tally)"
+            out.append(line)
         agents = list(world.agents.values())
         if not agents:
             # A TOWN WITH NOBODY IN IT READS `good` ON EVERY OTHER GAUGE,
