@@ -68,11 +68,33 @@ def template_placeholders():
     return _PLACEHOLDERS
 
 
-def echoed_template(action):
-    """Return the placeholder a reply quoted back at us, or None.
+# The model's own scaffolding, not ours (v3.8.7).
+#
+# Day 164, 20:30 — Hazel Pike's entire contribution to the town group chat:
+#
+#     Hazel → Pepperton_Gossip: <|end|>
+#
+# v3.8.3 taught this detector OUR placeholders and stopped there, so a
+# villager handing back phi4-mini's end-of-turn token parsed clean and
+# counted toward live_pct. I found the form we wrote and forgot the form the
+# model speaks — the same shape of miss, one layer out, twelve hours later.
+#
+# Matched by SHAPE rather than by a list of names: `<|...|>` is chat-template
+# syntax and no villager has ever typed it. A new model with a new sentinel
+# is caught the day it is cast, without anyone remembering this file.
+_SENTINEL = re.compile(r"<\|[^|<>]{0,40}\|>|</s>|\[/?INST\]")
 
-    "(empty)" for a speech act with nothing in it — silence returned in the
-    shape of an answer is not an answer either."""
+
+def echoed_template(action):
+    """Return what a reply quoted back at us instead of deciding, or None.
+
+    Three kinds, all objective, none of them a judgment about content:
+      * OUR placeholder   — "<message>", "[Your Name]"   (v3.8.3)
+      * THEIR sentinel    — "<|end|>", "</s>", "[INST]"  (v3.8.7)
+      * nothing at all    — "(empty)"
+
+    A villager may say anything they like. What they may not do is hand back
+    the form."""
     if not isinstance(action, dict):
         return None
     for key in _CONTENT_FIELDS:
@@ -82,6 +104,9 @@ def echoed_template(action):
         for token in template_placeholders():
             if token in value:
                 return token
+        hit = _SENTINEL.search(value)
+        if hit:
+            return hit.group(0)
     if action.get("action") in ("say", "text") and \
             not str(action.get("text", "")).strip():
         return "(empty)"

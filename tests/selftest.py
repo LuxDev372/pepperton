@@ -2832,6 +2832,20 @@ def _echoed_class():
     check("...and silence returned in the shape of speech",
           prompts.echoed_template({"action": "say", "text": "   "})
           == "(empty)", "")
+    check("HAZEL AT 20:30 IS CAUGHT TOO — the model's own sentinel (v3.8.7)",
+          prompts.echoed_template(
+              {"action": "text", "to": "everyone", "text": "<|end|>"})
+          == "<|end|>",
+          "phi4-mini's end-of-turn token, posted to the town group chat")
+    check("...and sentinels we have never seen, by shape not by name",
+          all(prompts.echoed_template({"action": "say", "text": t}) == t
+              for t in ("<|im_end|>", "<|eot_id|>", "<|endoftext|>",
+                        "</s>", "[INST]")),
+          "a new model's scaffolding is caught the day it is cast")
+    check("...even when it trails real words",
+          prompts.echoed_template(
+              {"action": "say",
+               "text": "Morning, Nora.<|im_end|>"}) == "<|im_end|>", "")
     check("a real answer is NOT flagged — this is not a quality judgment",
           prompts.echoed_template(
               {"action": "say", "text": "Morning. I'm open."}) is None
