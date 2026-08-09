@@ -71,6 +71,21 @@ class Agent:
             "needs": {k: round(v, 1) for k, v in self.needs.items()},
             "activity": (self.activity or {}).get("type"),
             "possessions": list(self.possessions),
+            # WHAT WE TOLD THEM DRIVES THEM (v3.9.5).
+            #
+            # `agent.goal` is rendered into the SYSTEM prompt every tick —
+            # "What's driving you lately: {goal}." — and it is the only
+            # durable statement of what a villager wants. A villager cannot
+            # set it: the two writers in the codebase are casting and
+            # `rng.choice(config.GOALS)` after a nightly reflection resolves
+            # one. It was never readable from outside the process, so every
+            # claim about a villager's motivation was an inference from
+            # behaviour back onto a list of seven strings — which is exactly
+            # the reasoning that killed four claims on 9 August.
+            #
+            # Pure observation. Read-only. Changes nothing.
+            # (claude/WHATS-DRIVING-YOU.md)
+            "goal": self.goal,
         }
 
 

@@ -141,12 +141,66 @@ def bracketed_aside(action):
     return None
 
 
+def goal_fragments():
+    """The distinctive tail of every goal string in config.GOALS.
+
+    A villager is told "What's driving you lately: {goal}." in the SYSTEM
+    prompt, every tick, forever. On Day 182 Ida Merriweather posted this to
+    the Pompeii group chat:
+
+        "I need to organize a town event nobody asked for."
+
+    That is config.GOALS[0], verbatim, converted to first person. It parsed
+    clean and counted toward live_pct, because this detector knew our
+    placeholders and the models' sentinels and nothing about our goals.
+    Third time in the same family, third layer out. (v3.9.5)
+
+    Matched on the TAIL, not the whole string: the leading "wants to" /
+    "is trying to" / "is quietly" is grammar a villager would naturally
+    change, and the remainder is the part nobody says by accident. Short
+    fragments are dropped so an ordinary sentence cannot trip it — "looking
+    for a business partner" is plausible speech; "organize a town event
+    nobody asked for" is a recitation.
+
+    Scraped from config, not hardcoded, so a town that edits its own goal
+    list is covered without anyone remembering this function exists.
+    (claude/WHATS-DRIVING-YOU.md)"""
+    global _GOAL_FRAGMENTS
+    if _GOAL_FRAGMENTS is None:
+        out = []
+        for goal in (getattr(config, "GOALS", []) or []) + \
+                    (getattr(config, "STRANGER_GOALS", []) or []):
+            tail = re.sub(r"^(wants to|is trying to|is quietly|is determined "
+                          r"to|is looking for|is clearly|claims to be|knew) ",
+                          "", str(goal).strip(), flags=re.I).strip()
+            if len(tail) < 24:
+                continue
+            out.append(tail.lower())
+            # Ida converted GOALS[0] to first person before saying it, so
+            # also carry the mechanical third->first person variant. This
+            # is a substitution, not a tuning: no case in today's logs is
+            # named here, and a goal list edited tomorrow gets the same
+            # treatment. Paraphrase is NOT caught and is not meant to be —
+            # a villager restating their preoccupation in their own words
+            # is thinking, not reciting.
+            first = tail.lower().replace(" their ", " my ").replace(
+                " they ", " I ").replace("wants ", "want ")
+            if first != tail.lower():
+                out.append(first)
+        _GOAL_FRAGMENTS = tuple(out)
+    return _GOAL_FRAGMENTS
+
+
+_GOAL_FRAGMENTS = None
+
+
 def echoed_template(action):
     """Return what a reply quoted back at us instead of deciding, or None.
 
-    Three kinds, all objective, none of them a judgment about content:
+    Four kinds, all objective, none of them a judgment about content:
       * OUR placeholder   — "<message>", "[Your Name]"   (v3.8.3)
       * THEIR sentinel    — "<|end|>", "</s>", "[INST]"  (v3.8.7)
+      * OUR goal line     — "organize a town event nobody asked for" (v3.9.5)
       * nothing at all    — "(empty)"
 
     A villager may say anything they like. What they may not do is hand back
@@ -163,6 +217,10 @@ def echoed_template(action):
         hit = _sentinel().search(value)
         if hit:
             return hit.group(0)
+        low = value.lower()
+        for fragment in goal_fragments():
+            if fragment in low:
+                return fragment
     if action.get("action") in ("say", "text") and \
             not str(action.get("text", "")).strip():
         return "(empty)"
