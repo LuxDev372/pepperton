@@ -96,6 +96,13 @@ _stamp("GOLDEN HASH")
 SEEDS = (7, 890811919)
 TICKS = 800
 
+# Envelope, not physics. See the note at the strip site below — this list
+# has now been wrong twice, both times about the same contributor's work.
+#   wid / event_id / cause_event_id / command_id : per-boot identity
+#   source / topic / thread_id / salience        : routing and annotation
+ENVELOPE_FIELDS = ("wid", "event_id", "cause_event_id", "command_id",
+                   "source", "topic", "thread_id", "salience")
+
 fingerprint = hashlib.sha256()
 for seed in SEEDS:
     World.close_all()   # Windows: an open transcript handle blocks the wipe
@@ -115,8 +122,23 @@ for seed in SEEDS:
         # fault in a contributor's thirteen-PR stack. An instrument that
         # cannot say what it is cannot be trusted to say anything else —
         # including what it thinks of somebody else's code. (LESSONS.md #1)
-        for per_boot in ("wid", "event_id", "cause_event_id", "command_id"):
-            event.pop(per_boot, None)
+        #
+        # AND THEN WE DID IT AGAIN. His social layer adds four more envelope
+        # fields — salience, source, thread_id, topic — and this list did
+        # not know their names, so the hash moved on day 1, event 1, before
+        # a single villager had chosen anything differently. We read that as
+        # "his stack changes the world with every feature dark" and parked
+        # the merge on it. It wasn't. Same lesson, same file, twice, on the
+        # same contributor's work.
+        #
+        # THE RULE: this list holds every field that describes the ENVELOPE
+        # an event arrived in — who routed it, what it was about, which boot
+        # it belongs to. It must never hold a field that describes what
+        # HAPPENED. If you add an envelope field to world.emit, add its name
+        # here in the same commit, or the next person to touch physics will
+        # be blamed for your metadata.
+        for envelope in ENVELOPE_FIELDS:
+            event.pop(envelope, None)
         fingerprint.update(json.dumps(event, sort_keys=True).encode())
     world = engine.world
     end_state = {
