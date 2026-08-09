@@ -16,6 +16,13 @@ _WORD = re.compile(r"[a-z']+")
 
 # Every store this process has opened, so a harness can close strays it
 # never had a reference to. See MemoryStore.close_all (v3.8.6).
+#
+# THIS IS A HARNESS-RECOVERY MECHANISM, NOT RESOURCE MANAGEMENT. It does not
+# prevent a leak; it makes one recoverable. Before v3.8.6 a leaked store was
+# an unrecoverable Windows lockout — now it is a leaked file descriptor until
+# somebody calls close_all(). Nobody should read "it gets swept eventually"
+# as "it is fine to skip closing things." Close what you open.
+# (Distinction owed to review, v3.8.8.)
 _OPEN_STORES = []
 
 

@@ -82,7 +82,63 @@ def template_placeholders():
 # Matched by SHAPE rather than by a list of names: `<|...|>` is chat-template
 # syntax and no villager has ever typed it. A new model with a new sentinel
 # is caught the day it is cast, without anyone remembering this file.
-_SENTINEL = re.compile(r"<\|[^|<>]{0,40}\|>|</s>|\[/?INST\]")
+# The bound was 40, which comfortably fits every sentinel we know of —
+# Llama 3's <|reserved_special_token_NNN|> family runs about 25-30. But this
+# project casts a new model family every few versions, and a constant tuned
+# to today's known templates goes stale silently: the same failure shape as
+# the placeholder detector before it learned to scrape VERBS. Widened, and
+# made a knob, because everything else here is one (the v2.4.1 law).
+# (Found by review, v3.8.8.)
+_SENTINEL_RE = None
+
+
+def _sentinel():
+    global _SENTINEL_RE
+    if _SENTINEL_RE is None:
+        n = max(8, int(getattr(config, "SENTINEL_MAX_LEN", 80)))
+        _SENTINEL_RE = re.compile(
+            r"<\|[^|<>]{0,%d}\|>|</s>|\[/?INST\]" % n)
+    return _SENTINEL_RE
+
+
+# ---------------------------------------------------- OBSERVED, NOT COUNTED
+#
+# Day 166: Vera Tibbs posted "All the projects we've worked on and finished
+# are listed here: [post a copy of the notice board text]" — the model
+# writing the instruction instead of the content. A third costume.
+#
+# WE DELIBERATELY DO NOT TREAT THIS AS AN ECHO, and the reason is the line
+# between an instrument and an editor.
+#
+# `<|end|>` and `<message>` are safe to catch because pipe-delimited chat
+# syntax and our own placeholders have a near-zero collision rate with real
+# dialogue — it is a judgment about SHAPE. Square brackets are ordinary
+# English: asides, citations, and the [laughs]-style stage direction some
+# models produce as genuine character voice. Separating "Vera is leaking an
+# instruction" from "Vera writes in brackets" needs a judgment about
+# MEANING, and we are not permitted that. A hand-typed verb list
+# (post|copy|insert|…) would rot exactly the way hard-coded placeholder
+# names would, only slower.
+#
+# So it is counted and shown to a human, and it NEVER touches
+# decision_source, live_pct, or clean. Visibility without putting a
+# false positive on the one number the provenance system exists to keep
+# honest. (Design owed to review, v3.8.8.)
+_ASIDE = re.compile(r"\[[^\[\]\n]{4,80}\]")
+
+
+def bracketed_aside(action):
+    """A bracketed stage direction, or None. OBSERVATIONAL ONLY — this must
+    never reach decision_source or any certifying count."""
+    if not isinstance(action, dict):
+        return None
+    for key in ("text", "note"):
+        value = action.get(key)
+        if isinstance(value, str):
+            hit = _ASIDE.search(value)
+            if hit:
+                return hit.group(0)[:80]
+    return None
 
 
 def echoed_template(action):
@@ -104,7 +160,7 @@ def echoed_template(action):
         for token in template_placeholders():
             if token in value:
                 return token
-        hit = _SENTINEL.search(value)
+        hit = _sentinel().search(value)
         if hit:
             return hit.group(0)
     if action.get("action") in ("say", "text") and \

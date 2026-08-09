@@ -595,6 +595,10 @@ class Engine:
             agent.last_reason = reason
             agent.last_decision_tick = self.world.tick_no
             self._record_provenance(agent, reason)
+            # observational only — never touches provenance or the bar
+            from sim import prompts as _p
+            if _p.bracketed_aside(action):
+                self.exp.note_aside()
             ok, summary = self.world.execute(agent, action)
             if (action or {}).get("action") in ("say", "text"):
                 agent.talk_streak += 1

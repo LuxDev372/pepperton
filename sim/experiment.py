@@ -144,6 +144,25 @@ class ExperimentLedger:
         row = by_day.setdefault(str(int(day)), {})
         row[source] = row.get(source, 0) + 1
 
+    def note_aside(self):
+        """Count a bracketed stage direction. OBSERVATIONAL ONLY (v3.8.8).
+
+        This is deliberately NOT a provenance class and deliberately NOT in
+        `decisions`. It cannot reach live_pct, cannot reach `clean`, and
+        cannot make a day inadmissible.
+
+        `<|end|>` is caught by shape and square brackets are not — brackets
+        are ordinary English, and telling "the model leaked an instruction"
+        apart from "this villager writes in asides" is a judgment about
+        meaning, which is the line between an instrument and an editor.
+
+        So: visible to a human, invisible to the bar. If the count climbs,
+        somebody looks. Nothing is certified or decertified on it.
+        (Design owed to review, v3.8.8.)"""
+        if not self.enabled or not self.run:
+            return
+        self.run["asides"] = self.run.get("asides", 0) + 1
+
     def day_integrity(self, day):
         """What fraction of ONE day was actually thought, or None if that
         day has no record. This is what a window verdict must cite."""

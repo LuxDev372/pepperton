@@ -2846,6 +2846,24 @@ def _echoed_class():
           prompts.echoed_template(
               {"action": "say",
                "text": "Morning, Nora.<|im_end|>"}) == "<|im_end|>", "")
+    e_tmp = Engine(seed=3)
+    check("the sentinel bound is a knob, not a constant (v3.8.8)",
+          prompts.echoed_template(
+              {"action": "say", "text": "<|" + "x" * 60 + "|>"}) is not None,
+          "a 60-char sentinel from a model we have not cast yet")
+    check("BRACKETS ARE OBSERVED, NEVER COUNTED — the editor line",
+          prompts.echoed_template(
+              {"action": "text", "to": "everyone",
+               "text": "listed here: [post a copy of the notice board text]"})
+          is None
+          and prompts.bracketed_aside(
+              {"action": "text", "to": "everyone",
+               "text": "listed here: [post a copy of the notice board text]"})
+          == "[post a copy of the notice board text]",
+          "seen by a human, invisible to live_pct")
+    check("...and an aside cannot make a day dirty",
+          e_tmp.decision_source("model decision") == "model",
+          "bracketed_aside never reaches decision_source")
     check("a real answer is NOT flagged — this is not a quality judgment",
           prompts.echoed_template(
               {"action": "say", "text": "Morning. I'm open."}) is None

@@ -151,6 +151,11 @@ async def experiment(day: int = None):
         "clean_day_count": len(clean),
         "today": exp.day_integrity(engine.world.clock.day),
         "admissible": bool(clean),
+        # OBSERVATIONAL, deliberately outside `integrity` so it cannot be
+        # mistaken for part of the bar. Bracketed stage directions —
+        # "[post a copy of the notice board text]" — are counted for a human
+        # to eyeball and never certify or decertify anything. (v3.8.8)
+        "observed_asides": run.get("asides", 0),
     }
     if day is not None:
         out["day_requested"] = exp.day_integrity(day)
