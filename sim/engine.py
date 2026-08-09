@@ -1072,18 +1072,31 @@ class Engine:
             out.append(f"FAMINE: {len(hungry)} of {len(agents)} at fullness "
                        f"zero")
 
-        # how much of their own life can they actually reach? Volume drives
-        # it, not window size. (claude/WHY-THE-DOORS-STAY-SHUT.md)
+        # MEMORY PRESSURE. Volume drives what a villager can reach, not
+        # window size. (claude/WHY-THE-DOORS-STAY-SHUT.md)
+        #
+        # v3.9.1 printed an HOURS figure here — 24 * k / rate — and it was
+        # wrong by a factor of about seven and a half. That arithmetic
+        # assumes memories fall evenly across the whole day and that the
+        # top-k is simply the last k rows. Neither holds: they sleep, which
+        # packs the writing into waking hours, and retrieval is SCORED, so
+        # importance drags older rows in. Measured properly through
+        # retrieve() itself, 227 memories a day gives 6.25 reachable hours,
+        # not 0.85.
+        #
+        # A DASHBOARD MAY NOT DERIVE A NUMBER IT CANNOT DERIVE. So this
+        # reports the raw pressure — the ratio that actually causes the
+        # problem — and leaves the measured span to the document that
+        # earned it. (Corrected in v3.9.2, same day I shipped it wrong.)
         try:
             day = max(1, world.clock.day)
-            per_day = [self.memory.count(a.name) / day for a in agents]
-            busiest = max(per_day)
+            busiest = max(self.memory.count(a.name) / day for a in agents)
             k = max(1, int(getattr(config, "MEMORY_TOP_K", 8)))
-            hours = round(24.0 * k / busiest, 1) if busiest else None
-            if hours is not None and hours < 24:
-                out.append(f"REACHABLE PAST ~{hours}h — the busiest villager "
-                           f"writes {busiest:.0f} memories a day against "
-                           f"MEMORY_TOP_K={k}")
+            if busiest > k * 4:
+                out.append(f"MEMORY PRESSURE {busiest / k:.0f}:1 — the "
+                           f"busiest villager writes {busiest:.0f} memories "
+                           f"a day and only MEMORY_TOP_K={k} reach the "
+                           f"prompt")
         except Exception:
             pass
 
