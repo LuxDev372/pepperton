@@ -1,6 +1,7 @@
 """Prompt construction for villager minds."""
 
 import json
+import re
 
 import config
 from sim.ledger import Ledger
@@ -30,6 +31,61 @@ _ECON_VERBS = (
 )
 VERBS = VERBS.replace("__ECON_VERBS__",
                       _ECON_VERBS if getattr(config, "ECONOMY", False) else "")
+
+
+# ------------------------------------------------- did they answer, or quote?
+#
+# Day 157, 02:30 —   Hazel:  <message>
+#
+# That was the whole decision. `<message>` is OUR placeholder, lifted out of
+# the schema two lines above and handed straight back. Sam did the same at
+# 22:15 and signed it "- [Your Name]".
+#
+# It is valid JSON, so it parses, so `decision_source` called it "model" and
+# it counted toward `live_pct: 100.0` on a day the ledger called admissible.
+#
+# PROVENANCE ANSWERED "WAS A MIND IN THE SEAT". IT NEVER ANSWERED "DID THE
+# MIND SAY ANYTHING." (claude/WHY-THE-DOORS-STAY-SHUT.md)
+#
+# This is not a judgment about quality — we are forbidden that, and it is the
+# difference between an instrument and an editor. It is string matching
+# against our own template, and the tokens are SCRAPED FROM THE VERB LIST
+# rather than typed here, so a placeholder added upstairs is detected the day
+# it ships instead of the day somebody remembers this file exists.
+_PLACEHOLDERS = None
+
+# fields a villager fills with their own words; the only places a quoted
+# placeholder can hide
+_CONTENT_FIELDS = ("text", "note", "project", "to", "item", "site", "reason")
+
+
+def template_placeholders():
+    global _PLACEHOLDERS
+    if _PLACEHOLDERS is None:
+        found = set(re.findall(r"<[A-Za-z][^<>]{0,48}>", VERBS))
+        found.add("[Your Name]")      # not ours; the models bring this one
+        _PLACEHOLDERS = frozenset(found)
+    return _PLACEHOLDERS
+
+
+def echoed_template(action):
+    """Return the placeholder a reply quoted back at us, or None.
+
+    "(empty)" for a speech act with nothing in it — silence returned in the
+    shape of an answer is not an answer either."""
+    if not isinstance(action, dict):
+        return None
+    for key in _CONTENT_FIELDS:
+        value = action.get(key)
+        if not isinstance(value, str):
+            continue
+        for token in template_placeholders():
+            if token in value:
+                return token
+    if action.get("action") in ("say", "text") and \
+            not str(action.get("text", "")).strip():
+        return "(empty)"
+    return None
 
 
 def _verbs(world):

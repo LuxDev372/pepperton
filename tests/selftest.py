@@ -2756,6 +2756,74 @@ def _one_town_one_process():
     World.close_all()
     fresh_data()
 
+def _echoed_class():
+    """A villager who quotes our own schema is not a villager who answered.
+
+    Day 157, 02:30 — Hazel's entire decision was `<message>`, the
+    placeholder from prompts.py line 11. Valid JSON, so it parsed, so it
+    was classified `model`, so it counted toward `live_pct: 100.0` on a day
+    /api/experiment called admissible.
+
+    We may not judge what a villager SAYS. We may notice when they handed
+    back the form instead of filling it in — string matching against our
+    own template, not editing. (v3.8.3,
+    claude/WHY-THE-DOORS-STAY-SHUT.md)"""
+    from sim import prompts
+    fresh_data()
+    check("the placeholder set is derived from the verb list itself",
+          "<message>" in prompts.template_placeholders()
+          and all(t in prompts.VERBS or t == "[Your Name]"
+                  for t in prompts.template_placeholders()),
+          f"{len(prompts.template_placeholders())} tokens scraped, no "
+          f"second copy to drift")
+    check("HAZEL AT 02:30 IS CAUGHT",
+          prompts.echoed_template(
+              {"action": "text", "to": "everyone", "text": "<message>"})
+          == "<message>", "the whole decision was our own placeholder")
+    check("...and Sam's signature at 22:15",
+          prompts.echoed_template(
+              {"action": "text", "to": "everyone",
+               "text": "Let's get moving! - [Your Name]"}) == "[Your Name]", "")
+    check("...and silence returned in the shape of speech",
+          prompts.echoed_template({"action": "say", "text": "   "})
+          == "(empty)", "")
+    check("a real answer is NOT flagged — this is not a quality judgment",
+          prompts.echoed_template(
+              {"action": "say", "text": "Morning. I'm open."}) is None
+          and prompts.echoed_template({"action": "work"}) is None
+          and prompts.echoed_template(
+              {"action": "idle", "note": "browses the shelves"}) is None, "")
+
+    e = Engine(seed=5)
+    check("the engine classifies it as its own kind",
+          e.decision_source("echoed the template <message>") == "echoed",
+          "beside unparsed, not inside model")
+    check("...and an understudy that echoes stays an understudy",
+          e.decision_source("host unreachable; understudy acted: echoed the "
+                            "template <message>") == "understudy",
+          "already not evidence; the stronger mark wins")
+
+    e.exp.enabled = True
+    e.exp.run = {"decisions": {}, "interventions": [], "decisions_by_day": {}}
+    for _ in range(9):
+        e.exp.note_decision("model", day=200)
+    row = e.exp.day_integrity(200)
+    check("a day of real answers certifies", row["clean"] is True,
+          f"{row['live']}/{row['decisions']} live")
+    e.exp.note_decision("echoed", day=200)
+    row = e.exp.day_integrity(200)
+    check("ONE ECHO MAKES THE DAY DIRTY — the bar now means what it says",
+          row["clean"] is False and row["echoed"] == 1,
+          f"9 real answers and one quoted form: live_pct {row['live_pct']}")
+    check("...and clean_days will not offer it to a window",
+          200 not in e.exp.clean_days(), f"clean_days={e.exp.clean_days()}")
+    check("...and the run headline carries it too",
+          e.exp.integrity()["echoed"] == 1
+          and e.exp.integrity()["clean"] is False, "")
+    World.close_all()
+    fresh_data()
+
+_echoed_class()
 _one_town_one_process()
 _seven_hours()
 _the_two_verbs()

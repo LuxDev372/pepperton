@@ -167,6 +167,14 @@ class LLMBrain(BrainBase):
         action = prompts.parse_json_reply(raw)
         if not isinstance(action, dict) or "action" not in action:
             return {"action": "idle", "note": "mutters something unintelligible"}, raw, "unparseable reply"
+        # a reply that quotes our own schema is not a decision (v3.8.3).
+        # The ACTION IS UNTOUCHED — the world does exactly what it did
+        # before, and the villager is not corrected, censored or nudged.
+        # Only the provenance changes, so a day containing it can no longer
+        # certify as 100% thought.
+        quoted = prompts.echoed_template(action)
+        if quoted:
+            return action, raw, f"echoed the template {quoted}"
         return action, raw, "model decision"
 
     def reflect(self, agent, day, day_memories):

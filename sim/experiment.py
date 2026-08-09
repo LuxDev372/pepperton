@@ -162,7 +162,11 @@ class ExperimentLedger:
             "live_pct": round(100.0 * live / total, 1) if total else None,
             "understudy": understudy,
             "unparsed": row.get("unparsed", 0),
-            "clean": total > 0 and understudy == 0 and not row.get("unparsed"),
+            "echoed": row.get("echoed", 0),
+            # a day containing a villager who quoted our own schema back at
+            # us is not a day that was 100% thought (v3.8.3)
+            "clean": total > 0 and understudy == 0
+                     and not row.get("unparsed") and not row.get("echoed"),
         }
 
     def clean_days(self):
@@ -234,9 +238,11 @@ class ExperimentLedger:
             "live_pct": round(100.0 * live / total, 1) if total else None,
             "understudy": d.get("understudy", 0) + d.get("dark", 0),
             "unparsed": d.get("unparsed", 0),
+            "echoed": d.get("echoed", 0),
             "interventions": len(self.run["interventions"]),
             "clean": total > 0 and (d.get("understudy", 0)
-                                    + d.get("dark", 0)) == 0,
+                                    + d.get("dark", 0)) == 0
+                     and not d.get("unparsed") and not d.get("echoed"),
         }
 
     # ----------------------------------------------------------------- io

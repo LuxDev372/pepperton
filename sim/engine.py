@@ -847,6 +847,8 @@ class Engine:
             return "understudy"
         if "unparseable" in r:
             return "unparsed"
+        if "echoed the template" in r:
+            return "echoed"
         if "host unreachable" in r:
             return "dark"
         return "model"
@@ -901,11 +903,13 @@ class Engine:
         understudied = sorted(by_src.get("understudy", [])
                               + by_src.get("dark", []))
         unparsed = sorted(by_src.get("unparsed", []))
+        echoed = sorted(by_src.get("echoed", []))
         unknown = sorted(by_src.get("unknown", []))
         live = len(by_src.get("model", [])) + len(by_src.get("possessed", []))
-        # red only when somebody is genuinely being faked; amber while a
-        # waking villager has yet to be observed; green otherwise
-        state = ("bad" if (understudied or unparsed)
+        # red only when somebody is genuinely being faked OR handing our own
+        # schema back; amber while a waking villager has yet to be observed;
+        # green otherwise
+        state = ("bad" if (understudied or unparsed or echoed)
                  else "warn" if unknown else "good")
         return {
             "live": live,
@@ -915,6 +919,7 @@ class Engine:
             "state": state,
             "understudied": understudied,
             "unparsed": unparsed,
+            "echoed": echoed,
             "unknown": unknown,
         }
 
