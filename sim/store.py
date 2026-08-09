@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import uuid
 
 import config
@@ -85,7 +86,90 @@ class TownStore:
         self._ensure_parent(self.transcript_jsonl)
         self._ensure_parent(self.transcript_log)
         self.sweep_orphans()
+        self._claim_town()
         self.memory = MemoryStore(db_path=self.db_path, world_id=world_id)
+
+    # ------------------------------------------------------- one town, once
+    def _lockfile(self):
+        return os.path.join(os.path.dirname(self.state_path) or ".",
+                            ".town.lock")
+
+    @staticmethod
+    def _alive(pid):
+        try:
+            os.kill(pid, 0)
+        except (OSError, ProcessLookupError, PermissionError, TypeError):
+            return False
+        return True
+
+    def _claim_town(self):
+        """A town may be open by exactly one process. (v3.8.2)
+
+        On Day 157 Pepperton ran TWICE for four hours — two engines, one
+        SQLite file, both loading the same checkpoint and ticking it
+        forward, each rolling the other's memories off the end of the
+        timeline. Every instrument we own reported the town healthy the
+        entire time. It was found because a PORT was busy, which is the one
+        accident that happened to be loud.
+
+        Nine of nine instruments missed it, and this one is not an
+        instrument — it is a door. Nothing detects a double-run reliably
+        after the fact; the only fix is to make the second one impossible.
+
+        SAME PROCESS IS FINE. The suite opens several towns at once inside
+        one interpreter and always has. What is forbidden is a second OS
+        process, which is the only shape that corrupts anything.
+
+        Never wedges a town: a lock whose PID is dead is taken over and
+        said so out loud. `TOWN_LOCK = False` disables it entirely (the
+        v2.4.1 law — every knob getattr-defaulted)."""
+        self._held_lock = None
+        if not getattr(config, "TOWN_LOCK", True):
+            return
+        path = self._lockfile()
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    was = json.load(f)
+                pid = int(was.get("pid", -1))
+                if pid != os.getpid() and self._alive(pid):
+                    raise RuntimeError(
+                        f"{was.get('town', 'this town')} is already running "
+                        f"as PID {pid} (since {was.get('opened_utc', '?')}), "
+                        f"using {os.path.dirname(self.state_path) or '.'}. "
+                        f"Two engines on one town erase each other's "
+                        f"memories. Stop that process first — plain kill, "
+                        f"never -9 — or set TOWN_LOCK = False if you "
+                        f"genuinely mean it.")
+                if pid != os.getpid():
+                    print(f"[STORE] taking over a stale town lock from dead "
+                          f"PID {pid}", flush=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"pid": os.getpid(),
+                           "town": getattr(config, "TOWN_NAME", "?"),
+                           "world_id": self.world_id,
+                           "opened_utc": time.strftime(
+                               "%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, f)
+            self._held_lock = path
+        except RuntimeError:
+            raise
+        except OSError:
+            # a read-only or crowded disk must not stop a town booting; we
+            # lose the guard, not the town
+            self._held_lock = None
+
+    def _release_town(self):
+        path = getattr(self, "_held_lock", None)
+        if not path:
+            return
+        self._held_lock = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                if int(json.load(f).get("pid", -1)) != os.getpid():
+                    return          # somebody else's now; leave it alone
+            os.unlink(path)
+        except (OSError, ValueError):
+            pass
 
     def sweep_orphans(self):
         """Delete temp files left behind by a kill mid-atomic-write (v3.6.2).
@@ -468,3 +552,4 @@ class TownStore:
         close = getattr(self.memory, "close", None)
         if close:
             close()
+        self._release_town()

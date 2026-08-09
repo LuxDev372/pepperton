@@ -876,6 +876,7 @@ _instruments_v38()
 def _road_collision():
     fresh_data()
     import json as _json
+    from sim.store import TownStore
     import tempfile as _tf
     from sim import road
     _t, _had_t = snapshot_knob("TRAVEL")
@@ -2379,6 +2380,7 @@ def _half_an_emoji():
     because of half of a character.
     """
     import json as _json
+    from sim.store import TownStore
     from sim.store import scrub_surrogates
     fresh_data()
 
@@ -2432,6 +2434,7 @@ def _the_road():
     nothing anywhere tells a villager it is there. These tests guard the
     silence as carefully as the mechanism."""
     import json as _json
+    from sim.store import TownStore
     from sim import road
     fresh_data()
     old, had_old = snapshot_knob("TRAVEL")
@@ -2678,6 +2681,82 @@ def _the_two_verbs():
     World.close_all()
     fresh_data()
 
+def _one_town_one_process():
+    """A second OS process may not open a town that is already open.
+
+    Day 157: Pepperton ran twice for four hours. Two engines, one SQLite
+    file, both ticking the same checkpoint forward, each rolling the
+    other's memories off the end of the timeline — and every instrument we
+    own reported the town healthy the whole time. It surfaced only because
+    a PORT was busy.
+
+    This is not an instrument. It is a door. (v3.8.2)"""
+    import json as _json
+    from sim.store import TownStore
+    import subprocess as _sp
+    fresh_data()
+    store = TownStore(world_id="lock-a")
+    lockpath = store._lockfile()
+    check("opening a town claims it", os.path.exists(lockpath),
+          os.path.basename(lockpath))
+    check("...and the claim names the process holding it",
+          _json.load(open(lockpath))["pid"] == os.getpid(), "")
+
+    # the suite itself opens several towns in one interpreter, and always has
+    same = TownStore(world_id="lock-b")
+    check("the SAME process may open a town twice — the suite depends on it",
+          same is not None, "in-process is not the shape that corrupts")
+    same.close()
+
+    # a foreign, LIVE pid: PID 1 always exists and is never us
+    with open(lockpath, "w") as f:
+        _json.dump({"pid": 1, "town": "Pepperton",
+                    "opened_utc": "2026-08-09T19:43:00Z"}, f)
+    refused = None
+    try:
+        TownStore(world_id="lock-c")
+    except RuntimeError as exc:
+        refused = str(exc)
+    check("A SECOND PROCESS IS REFUSED — the Day 157 failure is now impossible",
+          refused is not None, "")
+    check("...and the refusal names the PID to go and stop",
+          bool(refused) and "PID 1" in refused,
+          (refused or "")[:60])
+    check("...and does not tell you to kill -9 it",
+          bool(refused) and "never -9" in refused, "")
+
+    # a lock whose owner is dead must never wedge a town
+    dead = _sp.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    with open(lockpath, "w") as f:
+        _json.dump({"pid": dead.pid, "town": "Pepperton"}, f)
+    took_over = TownStore(world_id="lock-d")
+    check("a STALE lock is taken over, not obeyed — no town is ever wedged",
+          _json.load(open(lockpath))["pid"] == os.getpid(),
+          f"dead PID {dead.pid} cleared")
+    took_over.close()
+    check("closing a town releases its claim", not os.path.exists(lockpath), "")
+
+    old, had_old = getattr(config, "TOWN_LOCK", None), hasattr(config, "TOWN_LOCK")
+    try:
+        config.TOWN_LOCK = False
+        with open(lockpath, "w") as f:
+            _json.dump({"pid": 1, "town": "Pepperton"}, f)
+        off = TownStore(world_id="lock-e")
+        check("TOWN_LOCK = False disables the door for anyone who means it",
+              off is not None, "the v2.4.1 law — every knob has a default")
+        off.close()
+    finally:
+        restore_knob("TOWN_LOCK", old, had_old)
+    store.close()
+    try:
+        os.unlink(lockpath)
+    except OSError:
+        pass
+    World.close_all()
+    fresh_data()
+
+_one_town_one_process()
 _seven_hours()
 _the_two_verbs()
 _townsfolk()
