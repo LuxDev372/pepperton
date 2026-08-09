@@ -2544,6 +2544,142 @@ def _the_road():
     World.close_all()
     fresh_data()
 
+def _seven_hours():
+    """A villager at Pepperton's real memory volume can reach ONE DAY.
+
+    Day 157: every villager in Pepperton was writing 187-227 memories a
+    day. `MEMORY_TOP_K` is 8. At that volume the eight slots are full
+    before the sun moves, and a villager's entire reachable past is this
+    morning — measured at 6.25 sim-hours through this very function.
+
+    Nora Tibbs' foreclosure sits ~23,000 rows behind a 1200-row window. It
+    does not lose on score. It never loads. And MEMORY_KEEPSAKES, built in
+    v3.6 so the big things would stay with her, cannot win a slot: a
+    keepsake scores at most 1.0 (recency dead) against ~1.5 for anything
+    from breakfast.
+
+    We shipped that fix, tested it, armed it, and it has never once changed
+    what a villager thinks about. (claude/WHY-THE-DOORS-STAY-SHUT.md)
+
+    This test exists so that stops being true loudly rather than quietly."""
+    # snapshot_knob() copies dicts; these two are plain ints
+    ow, had_w = getattr(config, "MEMORY_WINDOW", None), \
+        hasattr(config, "MEMORY_WINDOW")
+    ok_, had_k = getattr(config, "MEMORY_KEEPSAKES", None), \
+        hasattr(config, "MEMORY_KEEPSAKES")
+    try:
+        config.MEMORY_WINDOW = 1200        # Pepperton's live setting
+        config.MEMORY_KEEPSAKES = 40       # Pepperton's live setting
+        fresh_data()
+        from sim.memory import MemoryStore
+        store = MemoryStore(config.DB_PATH, world_id="sevenhours")
+        per_day, days, tpd = 227, 40, 96
+        step, tick = tpd / per_day, 0.0
+        import random as _rnd
+        rng = _rnd.Random(11)
+        for d in range(1, days + 1):
+            for i in range(per_day):
+                tick += step
+                if d == 1 and i == 0:
+                    store.add("Nora", int(tick), d, "09:00", "event",
+                              "The bank foreclosed on my house.", 10)
+                    continue
+                store.add("Nora", int(tick), d, "12:00", "observation",
+                          f"day {d} thing {i}",
+                          rng.choices([2, 3, 4, 5, 6, 7, 8, 9],
+                                      weights=[10, 22, 26, 20, 10, 6, 4, 2])[0])
+        now = int(tick)
+        top = store.retrieve("Nora", "what should I do today?", now)
+        span = now - min(r["tick"] for r in top)
+        check("a villager at 227 memories/day reaches ONE DAY, not more",
+              span < tpd, f"top-8 spans {span} ticks = {span/tpd*24:.2f} "
+                          f"sim-hours of a {days}-day life")
+        check("...only today is represented at all",
+              {r["day"] for r in top} == {days},
+              f"days in the prompt: {sorted({r['day'] for r in top})}")
+        check("THE FORECLOSURE IS UNREACHABLE — keepsakes cannot win a slot",
+              not any("foreclosed" in r["text"] for r in top),
+              f"importance 10, {store.count('Nora'):,} rows deep, "
+              f"MEMORY_KEEPSAKES={config.MEMORY_KEEPSAKES}")
+    finally:
+        restore_knob("MEMORY_WINDOW", ow, had_w)
+        restore_knob("MEMORY_KEEPSAKES", ok_, had_k)
+    World.close_all()
+    fresh_data()
+
+
+def _the_two_verbs():
+    """`build` at your own workplace does NOT open your door.
+
+    Day 158, 08:30, inside Rosie's Diner:
+
+        Della:  You serving, or should I come back?
+        Walt:   I'm working on Pepperton's Community Kitchen at Rosie's
+                Diner, Della. You can come back if you're hungry!
+
+    He is in his workplace. He is working. The diner is shut, and a
+    customer with money walks back out of town — because `_verb_build`
+    sets activity "build" and `Townsfolk._open_here` only recognises
+    "work". Two mechanisms, one English word, indistinguishable from
+    inside.
+
+    Physics, not a bug, and this test does not argue otherwise. It pins
+    the physics down so the prompt question stays separable from it."""
+    old, had_old = snapshot_knob("TOWNSFOLK")
+    oe, had_e = getattr(config, "ECONOMY", None), hasattr(config, "ECONOMY")
+    try:
+        config.ECONOMY = True
+        config.TOWNSFOLK = {"enabled": True, "count": 6, "shop_chance": 1.0,
+                            "move_chance": 0.0, "speak_chance": 0.0,
+                            "oddjob_chance": 0.0, "shut_quiet_ticks": 1}
+        fresh_data()
+        e = Engine(seed=7)
+        e.run_headless(30)
+        w, folk = e.world, e.folk
+        who = next((a for a in w.agents.values()
+                    if a.workplace() and a.workplace() in w.tills
+                    and not w.locations.get(a.workplace(), {}).get("bank")),
+                   None)
+        check("the town has a villager who owns a counter", who is not None, "")
+        if who is None:
+            World.close_all(); fresh_data(); return
+        shop = who.workplace()
+        folk.ensure()
+        for p in folk.people:
+            p["location"], p["fixed"] = shop, True
+
+        def probe(activity):
+            who.location, who.asleep, who.activity = shop, False, activity
+            w.customers_turned_away_today = 0
+            opened = folk._open_here(shop)
+            before = w.tills.get(shop, 0.0)
+            folk._shut_said.clear()
+            folk.step()
+            return (opened, round(w.tills.get(shop, 0.0) - before, 2),
+                    w.customers_turned_away_today)
+
+        on, took, away = probe({"type": "work", "note": "",
+                                "until_tick": w.tick_no + 16})
+        check("a villager working his own counter OPENS it",
+              on is not None and on.name == who.name, f"{shop}")
+        check("...and money crosses the counter", took > 0, f"+${took:.2f}")
+        bon, btook, baway = probe({"type": "build", "note": "",
+                                   "project": "community_kitchen",
+                                   "until_tick": w.tick_no + 16})
+        check("THE SAME MAN, SAME ROOM, BUILDING — the door is SHUT",
+              bon is None, "activity 'build' is not activity 'work'")
+        check("...the till takes nothing", btook == 0, f"+${btook:.2f}")
+        check("...and the customers are counted as turned away",
+              baway > 0, f"{baway} left with their money "
+                         f"(was ${took:.2f} a moment ago)")
+    finally:
+        restore_knob("TOWNSFOLK", old, had_old)
+        restore_knob("ECONOMY", oe, had_e)
+    World.close_all()
+    fresh_data()
+
+_seven_hours()
+_the_two_verbs()
 _townsfolk()
 _the_road()
 _half_an_emoji()
