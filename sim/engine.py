@@ -8,6 +8,7 @@ import config
 from sim import brains
 from sim.agents import generate_cast
 from sim.bus import BusRoute
+from sim.causality import Command
 from sim.director import Director
 from sim.experiment import ExperimentLedger
 from sim.radio import Radio
@@ -148,6 +149,7 @@ class Engine:
                 world.events = evs
             world._event_seq = state.get(
                 "event_seq", max((e.get("seq", 0) for e in evs), default=0))
+            world._command_seq = state.get("command_seq", 0)
             world.tick_no = state["tick_no"]
             world.clock.day = state["day"]
             world.clock.minutes = state["minutes"]
@@ -286,6 +288,7 @@ class Engine:
             },
             "tick_no": self.world.tick_no,
             "event_seq": self.world._event_seq,
+            "command_seq": self.world._command_seq,
             "memory_seq": self.memory.high_watermark(),
             "day": self.world.clock.day,
             "minutes": self.world.clock.minutes,
@@ -599,7 +602,14 @@ class Engine:
             from sim import prompts as _p
             if _p.bracketed_aside(action):
                 self.exp.note_aside()
-            ok, summary = self.world.execute(agent, action)
+            # ekinnee's causal envelope (PR #3): every villager action goes
+            # through apply_command, so an event can name what caused it.
+            # Behaviour-neutral — the golden hash does not move.
+            result = self.world.apply_command(Command(
+                kind="action", source="villager", actor=agent.name,
+                payload=action or {},
+            ))
+            ok, summary = result.accepted, result.summary
             if (action or {}).get("action") in ("say", "text"):
                 agent.talk_streak += 1
             else:
