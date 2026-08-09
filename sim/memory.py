@@ -202,12 +202,19 @@ class MemoryStore:
         query_tokens = _tokens(query)
         window = max(1, int(getattr(config, "MEMORY_WINDOW", 400)))
         keepsakes = max(0, int(getattr(config, "MEMORY_KEEPSAKES", 0)))
+        # BOUNDED BY now_tick (v3.9.1). This used to take the most recent
+        # rows and trust that nothing later existed — true in a live town,
+        # false in any harness, and false after a crash-restore if
+        # reconciliation ever lagged behind a retrieval. It cost me a
+        # measurement: a diurnal-window test came back with NEGATIVE spans
+        # because memories from the future leaked into the top-8.
+        # A villager may not remember what has not happened yet.
         cols = ("SELECT id, day, sim_time, kind, text, importance, tick "
-                "FROM memories WHERE agent=? AND world_id=?")
+                "FROM memories WHERE agent=? AND world_id=? AND tick<=?")
         with self._lock:
             rows = self._conn.execute(
                 cols + " ORDER BY tick DESC LIMIT ?",
-                (agent, self.world_id, window),
+                (agent, self.world_id, now_tick, window),
             ).fetchall()
             if keepsakes:
                 # the unforgettable: highest importance of an entire life,
@@ -215,7 +222,7 @@ class MemoryStore:
                 # one — the first time something happened to you.
                 rows = list(rows) + self._conn.execute(
                     cols + " ORDER BY importance DESC, tick ASC LIMIT ?",
-                    (agent, self.world_id, keepsakes),
+                    (agent, self.world_id, now_tick, keepsakes),
                 ).fetchall()
         seen = set()
         deduped = []

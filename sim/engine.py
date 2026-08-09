@@ -1017,7 +1017,83 @@ class Engine:
             "poor_box": round(world.tills.get(
                 getattr(config, "POOR_BOX", "the poor box"), 0.0), 2),
             "minds": self.minds_report(),
+            "flags": self.flags(),
         }
+
+    def flags(self):
+        """Anomalies CALLED OUT, not merely logged. (v3.9.1)
+
+        THE INSTRUMENT THAT WORKED AND NOBODY READ:
+
+            d163 ATTENDANCE LEDGER — EARNED ELSEWHERE (paid work, own door
+                 shut): the Rusty Tap — Nora took paid work elsewhere
+            d164 EARNED ELSEWHERE: Rosie's Diner — Walt took paid work
+            d167 EARNED ELSEWHERE: the plaza — Quinn took paid work
+
+        Three times in five days the evening ledger stated this project's
+        central finding in plain English, by villager and by door — and it
+        still took a forensic investigation to surface it, because it was a
+        normal-looking line in a transcript nobody greps.
+
+        Every other instrument failure this week was an instrument that
+        could not speak. This was one that spoke every evening into an empty
+        room. **The fix for that is a detector, not a rereading.**
+        (Design owed to review, v3.9.1.)
+
+        Pure observation, computed from state that already exists. Changes
+        nothing, moves no hash, cannot make a day dirty. It only decides
+        what gets a line of its own instead of a line in a log."""
+        world = self.world
+        out = []
+        agents = list(world.agents.values())
+        if not agents:
+            # A TOWN WITH NOBODY IN IT READS `good` ON EVERY OTHER GAUGE,
+            # because every gauge we own asks a question about villagers.
+            return ["EMPTY TOWN — no villagers"]
+
+        employed = [a for a in agents if a.workplace()]
+        # earned money today, but their own door never opened
+        elsewhere = sorted(
+            a.name for a in employed
+            if a.name not in world.worked_today
+            and world.earned_today.get(a.name, 0) > 0)
+        for name in elsewhere:
+            streak = world.absence_streaks.get(name, 0)
+            out.append(f"EARNED ELSEWHERE: {name} took paid work while "
+                       f"{world.agents[name].workplace()} stayed shut "
+                       f"(day {streak} of the streak)")
+
+        if employed and not (set(world.worked_today) & {a.name for a in employed}):
+            out.append(f"NO DOOR OPENED TODAY — {len(employed)} villagers "
+                       f"hold a workplace and none of them opened it")
+
+        hungry = [a for a in agents if a.needs.get("fullness", 100) <= 0]
+        if len(hungry) >= max(2, len(agents) // 2):
+            out.append(f"FAMINE: {len(hungry)} of {len(agents)} at fullness "
+                       f"zero")
+
+        # how much of their own life can they actually reach? Volume drives
+        # it, not window size. (claude/WHY-THE-DOORS-STAY-SHUT.md)
+        try:
+            day = max(1, world.clock.day)
+            per_day = [self.memory.count(a.name) / day for a in agents]
+            busiest = max(per_day)
+            k = max(1, int(getattr(config, "MEMORY_TOP_K", 8)))
+            hours = round(24.0 * k / busiest, 1) if busiest else None
+            if hours is not None and hours < 24:
+                out.append(f"REACHABLE PAST ~{hours}h — the busiest villager "
+                           f"writes {busiest:.0f} memories a day against "
+                           f"MEMORY_TOP_K={k}")
+        except Exception:
+            pass
+
+        vacant = world.open_positions() if hasattr(world, "open_positions") else {}
+        jobless = [a for a in agents if not a.workplace()]
+        if vacant and jobless:
+            out.append(f"{len(vacant)} post(s) vacant and {len(jobless)} "
+                       f"villager(s) with no workplace — "
+                       f"{', '.join(sorted(vacant))}")
+        return out
 
     def inspect(self, name):
         """The click-a-villager chart. In live mode the engine lock can be
