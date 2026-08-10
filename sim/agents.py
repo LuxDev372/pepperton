@@ -15,6 +15,7 @@ class Agent:
         self.model = model
         self.host = host        # key into config.PROVIDERS / OLLAMA_HOSTS
         self.home = home
+        self.workplace_at = None    # v3.11: set when a post is claimed
         self.location = home
         self.money = 0
         self.pantry = 3     # home servings per day; restocked overnight
@@ -48,7 +49,12 @@ class Agent:
                 f"Quirk: {self.quirk}. Current preoccupation: {self.goal}.")
 
     def workplace(self):
-        return config.WORKPLACES.get(self.job)
+        # v3.11: a villager may hold a post this town INVENTED by finishing
+        # something, which is not in config.WORKPLACES and never can be —
+        # that dict is written before Day 1. workplace_at is set when a post
+        # is claimed and is authoritative; it falls back to the town charter
+        # for everyone cast into a job before they had a thought.
+        return getattr(self, "workplace_at", None) or config.WORKPLACES.get(self.job)
 
     def urgent_needs(self):
         out = []

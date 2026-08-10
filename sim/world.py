@@ -110,6 +110,12 @@ class World:
                 proj["permit_due"] = self.clock.day + self.permit_window(
                     proj["work"])
         self._permit_day_done = 0
+        # THE TOWN CAN MAKE WORK (v3.11): posts this town created for itself
+        # by finishing something. {job: location}. Merged over
+        # config.WORKPLACES by open_positions(); persisted in save_state.
+        # config.WORKPLACES is written before Day 1 and can never grow, which
+        # is why 491 build actions in Pepperton produced no employment.
+        self.extra_workplaces = {}
         # the Working Day: who clocked in today, what they earned, and
         # each worker's running absence streak (public record)
         self.worked_today = set()
@@ -1548,13 +1554,58 @@ class World:
         holds. A villager without work claims one by SHOWING UP — use the
         work action at the place, and the job is theirs. (v2.7: passed
         alongside the Holt Act — a law with teeth owes the toothless a
-        way to earn.)"""
+        way to earn.)
+
+        v3.11: the book is no longer only ours. A finished project adds its
+        own post to `extra_workplaces`, so a town that builds something can
+        be employed at it. And the filter that used to live at the call site
+        — only the JOBLESS may claim — is gone: taking a post releases the
+        one you hold. See _verb_work."""
         held = {a.job for a in self.agents.values()}
+        book = dict(getattr(config, "WORKPLACES", {}))
+        book.update(getattr(self, "extra_workplaces", {}))
         out = {}
-        for job, wp in getattr(config, "WORKPLACES", {}).items():
+        for job, wp in book.items():
             if wp and wp in self.locations and job not in held:
                 out[job] = wp
         return out
+
+    def make_workplace(self, proj):
+        """A finished project becomes a place a person can be PAID to stand in.
+
+        Returns the new location name, or None if this project is not that
+        kind of thing (inns give beds, houses give homes) or it already has
+        one. Called on completion and once at boot for anything finished
+        before this law existed.
+
+        THE TILL OPENS AT ZERO — never TILL_SEED. Seeding a built till would
+        mint money from nothing and break the only invariant this project has
+        never violated. It opens dry, which the Tibbs Door already permits,
+        so building something is a bet and not a bonus. It fills from the bus
+        or it does not fill.
+
+        No `sells_food`, no `bar`: _open_businesses gates on `in tills`, so a
+        till is enough to take a visitor's money. A greenhouse is not a diner.
+        """
+        if proj.get("inn") or proj.get("housing") or not proj.get("complete"):
+            return None
+        name = str(proj.get("name") or "").strip()
+        if not name:
+            return None
+        job = f"keeper of {name}"
+        if job in getattr(self, "extra_workplaces", {}):
+            return self.extra_workplaces[job]
+        place = name if name not in self.locations else f"{name} (the building)"
+        firsts = " and ".join(n.split()[0] for n in proj.get("contributors", {})) \
+            or "the townsfolk"
+        self.locations[place] = {
+            "desc": f"{proj.get('adds') or name} — built by {firsts}",
+            "built": True,
+        }
+        if getattr(config, "ECONOMY", False):
+            self.tills.setdefault(place, 0.0)   # DRY. never seeded.
+        self.extra_workplaces[job] = place
+        return place
 
     def _verb_work(self, agent, action):
         # An odd job takes priority over everything: a townsperson is
@@ -1578,18 +1629,34 @@ class World:
                 self.odd_jobs_today.add(agent.name)
                 return True, note
         wp = agent.workplace()
-        if not wp and getattr(config, "HIRING_ENABLED", True):
+        if getattr(config, "HIRING_ENABLED", True):
             openings = self.open_positions()
             here = next((j for j, w in sorted(openings.items())
                          if w == agent.location), None)
-            if here:
+            # v3.11: TAKING A JOB RELEASES THE ONE YOU HOLD. The old gate was
+            # `if not wp` — only the jobless could ever be hired, and there is
+            # no quit verb, so a villager cast as a librarian before she had a
+            # thought was a librarian forever, at a building with no till. The
+            # post she leaves goes back on the board the same tick, for anyone.
+            # Nobody is assigned and nobody is nudged: showing up IS the
+            # interview, exactly as it always was for the jobless.
+            if here and here != agent.job:
+                left = agent.job if wp else None
                 agent.job = here
+                agent.workplace_at = openings[here]
                 wp = agent.workplace()
-                self.emit("action", agent.name,
-                          f"was taken on as the town {here} at {wp} — "
-                          f"showed up, got the job, first shift starts now",
-                          wp)
-            elif openings:
+                if left:
+                    self.emit("action", agent.name,
+                              f"walked out of being the town {left} and was "
+                              f"taken on as {here} at {wp} — the {left}'s post "
+                              f"is open again, for anyone who shows up",
+                              wp)
+                else:
+                    self.emit("action", agent.name,
+                              f"was taken on as the town {here} at {wp} — "
+                              f"showed up, got the job, first shift starts now",
+                              wp)
+            elif not wp and openings:
                 sits = "; ".join(f"{j} at {w}"
                                  for j, w in sorted(openings.items()))
                 return False, (f"is {agent.job} and has no shift to work — "

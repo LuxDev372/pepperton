@@ -59,7 +59,8 @@ _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "location", "money", "pantry", "needs", "asleep", "activity",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
                  "last_say", "last_text", "soapbox", "last_decision_tick",
-                 "pending", "urgent_flag", "possessions", "last_source"]
+                 "pending", "urgent_flag", "possessions", "last_source",
+                 "workplace_at"]
 
 
 def _mock_with_rng(brain):
@@ -165,6 +166,15 @@ class Engine:
             world.clock.minutes = state["minutes"]
             world.locations = state["locations"]
             world.projects = state["projects"]
+            world.extra_workplaces = dict(state.get("extra_workplaces", {}))
+            # v3.11 reaches BACK. A town that finished things before this law
+            # existed has buildings standing in it that nobody could ever be
+            # employed at. They get their post and their dry till now — the
+            # window would otherwise test only new construction, on towns that
+            # may never build anything again.
+            for proj in world.projects:
+                if proj.get("complete"):
+                    world.make_workplace(proj)
             # merge in locations added by newer versions (e.g. the bank):
             # an old town wakes up and there's a new building on the square
             new_locs = [k for k in config.LOCATIONS if k not in world.locations]
@@ -312,6 +322,9 @@ class Engine:
             "minutes": self.world.clock.minutes,
             "locations": self.world.locations,
             "projects": self.world.projects,
+            # v3.11: posts this town invented for itself. config.WORKPLACES
+            # cannot grow; this can, so it must survive a restart.
+            "extra_workplaces": dict(getattr(self.world, "extra_workplaces", {})),
             "agents": agents,
             "reflected_day": self._reflected_day,
             "reflection_retry_day": self._reflection_retry_day,
@@ -522,6 +535,37 @@ class Engine:
                         elif loc is not None and proj.get("adds"):
                             loc["desc"] = (f"{loc['desc']}; {proj['adds']} "
                                            f"(built by {firsts})")
+                            # v3.11: and it becomes somewhere a person can be
+                            # PAID to stand. Till opens DRY — never seeded —
+                            # so the thing they built is a bet, not a bonus.
+                            place = self.world.make_workplace(proj)
+                            if place:
+                                job = f"keeper of {proj['name']}"
+                                self.world.emit(
+                                    "world", None,
+                                    f"SITUATIONS VACANT: {proj['name']} opens "
+                                    f"as a place of work — the post of {job} "
+                                    f"is unclaimed, the register is empty, and "
+                                    f"whoever shows up and works it is hired.",
+                                    place)
+                                # the people who built it are TOLD, once. What
+                                # is physically true, not what to want — same
+                                # class as the odd-job interrupt. No ranking,
+                                # no first refusal: first to show up gets it.
+                                for builder in proj.get("contributors", {}):
+                                    who = self.world.agents.get(builder)
+                                    if not who:
+                                        continue
+                                    who.pending.append({
+                                        "text": (f"{proj['name']} — the thing "
+                                                 f"you put {proj['contributors'][builder]} "
+                                                 f"shifts into — is finished and "
+                                                 f"OPEN as a workplace. The post "
+                                                 f"of {job} is unclaimed. Work "
+                                                 f"there and it is yours."),
+                                        "interrupt": True,
+                                        "sim_time": self.world.clock.hhmm,
+                                    })
                         # EVERYONE learns it exists — phones buzz, memories form
                         for other in self.world.agents.values():
                             if other.name in proj["contributors"]:
