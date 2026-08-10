@@ -1590,7 +1590,13 @@ class World:
         if total <= limit:
             shown, rest = openings, 0
         else:
-            offset = self.clock.day % total
+            # step by the PAGE, not by one: forty posts five at a time
+            # cycles in eight days instead of forty, so every post is named
+            # more than once inside a twenty-day window. A board that takes
+            # longer to cycle than the experiment runs would bias the result
+            # toward "nobody claimed anything" for a reason that has nothing
+            # to do with the villagers.
+            offset = (self.clock.day * limit) % total
             shown = (openings + openings)[offset:offset + limit]
             rest = total - limit
         text = "; ".join(f"{j} at {w}" for j, w in shown)

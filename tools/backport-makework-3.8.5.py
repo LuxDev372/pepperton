@@ -95,7 +95,10 @@ EDITS = {
         if total <= limit:
             shown, rest = openings, 0
         else:
-            offset = self.clock.day % total
+            # step by the PAGE, not by one: forty posts five at a time
+            # cycles in eight days instead of forty, so every post is named
+            # more than once inside a twenty-day window.
+            offset = (self.clock.day * limit) % total
             shown = (openings + openings)[offset:offset + limit]
             rest = total - limit
         text = "; ".join(f"{j} at {w}" for j, w in shown)
