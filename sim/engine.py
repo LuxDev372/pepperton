@@ -60,7 +60,7 @@ _AGENT_FIELDS = ["job", "traits", "quirk", "goal", "model", "host", "home",
                  "relationships", "is_stranger", "drink_ticks", "talk_streak",
                  "last_say", "last_text", "soapbox", "last_decision_tick",
                  "pending", "urgent_flag", "possessions", "last_source",
-                 "workplace_at"]
+                 "workplace_at", "phone_day", "phone_left"]
 
 
 def _mock_with_rng(brain):

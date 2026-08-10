@@ -16,6 +16,8 @@ class Agent:
         self.host = host        # key into config.PROVIDERS / OLLAMA_HOSTS
         self.home = home
         self.workplace_at = None    # v3.11: set when a post is claimed
+        self.phone_day = 0          # v3.11: the day this allowance belongs to
+        self.phone_left = 0         # v3.11: group posts left today
         self.location = home
         self.money = 0
         self.pantry = 3     # home servings per day; restocked overnight

@@ -388,6 +388,15 @@ def decision_prompt(agent, world, perceptions, memories):
                        "Words are piling up and your life is not moving. Everyone "
                        "can see the notice board — and your name isn't on it. Pick "
                        "a REAL action this time: build, work, go somewhere, do.")
+    # THE PHONE BILL (v3.11) — a status readout, in the same class as their
+    # money. Without it a refused post is inexplicable, and a villager who
+    # cannot see the constraint cannot budget against it. It says nothing
+    # about what to do with the balance.
+    phone_note = ""
+    _pl = world.phone_left(agent) if hasattr(world, "phone_left") else None
+    if _pl is not None:
+        phone_note = (f". Phone: {_pl} group post{'' if _pl == 1 else 's'} "
+                      f"left today (talking to people here is free)")
     mem_lines = "\n".join(
         f"- (day {m['day']} {m['sim_time']}) {m['text']}" for m in memories
     ) or "- nothing comes to mind"
@@ -526,7 +535,7 @@ def decision_prompt(agent, world, perceptions, memories):
                                 f"showing up IS the interview.")
     return f"""It is {world.clock.label}. You are at {agent.location} ({world.locations[agent.location].get('desc', '')}).{drink_note}{night_note}
 Here with you: {people}.{rel_note}
-Your money: ${agent.money:.0f}{money_tag}. Your needs: {'; '.join(needs_lines)}.{ledger_note}{shop_note}
+Your money: ${agent.money:.0f}{money_tag}{phone_note}. Your needs: {'; '.join(needs_lines)}.{ledger_note}{shop_note}
 You were doing: {activity}.
 
 The town notice board (public — everyone sees who builds and who doesn't. Building is VOLUNTEER work: it pays $0 and glory; jobs pay money. A person needs both):

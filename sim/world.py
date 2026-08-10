@@ -116,6 +116,10 @@ class World:
         # config.WORKPLACES is written before Day 1 and can never grow, which
         # is why 491 build actions in Pepperton produced no employment.
         self.extra_workplaces = {}
+        # THE PHONE BILL (v3.11): group posts spent per villager per day, and
+        # posts the plan refused. Operator-facing only — never serialised,
+        # never shown to a villager beyond their own remaining balance.
+        self.posts_blocked = {}
         # the Working Day: who clocked in today, what they earned, and
         # each worker's running absence streak (public record)
         self.worked_today = set()
@@ -1000,6 +1004,30 @@ class World:
         return True, f"said: {text}"
 
 
+    def phone_left(self, agent):
+        """Group-chat posts this villager has left today, or None if the plan
+        is off. (v3.11)
+
+        Speech is the only free action in this world. A meal is $5, a drink
+        $4, a room $8; rent falls every three days and houses get seized —
+        and broadcasting to every villager at once costs nothing and can be
+        done every fifteen minutes forever. Pepperton days 164-184: 3,790
+        group posts against 720 actions of any kind. A tick spent posting is
+        a tick not spent working.
+
+        Talking to the people in the room with you is FREE and always will
+        be: that needs no carrier. This meters the broadcast only.
+
+        Refilled lazily on the day it is asked for, so it needs no hook in
+        the tick loop and consumes no randomness."""
+        cfg = getattr(config, "PHONE", None) or {}
+        if not cfg.get("enabled"):
+            return None
+        if getattr(agent, "phone_day", 0) != self.clock.day:
+            agent.phone_day = self.clock.day
+            agent.phone_left = int(cfg.get("free_posts_per_day", 6))
+        return agent.phone_left
+
     def _verb_text(self, agent, action):
         text = _sanitize_speech((action.get("text") or "").strip())
         if not text:
@@ -1026,6 +1054,20 @@ class World:
                 return False, ("looked up from their phone — every single person "
                                "in town is standing in this room. Posting to the "
                                "group chat would be absurd; just SPEAK")
+            # THE PHONE BILL (v3.11): the plan is checked LAST, after every
+            # other reason a post could fail, so a villager is never told
+            # they are out of data for a post that was never going to send.
+            left = self.phone_left(agent)
+            if left is not None:
+                if left <= 0:
+                    self.posts_blocked[agent.name] = \
+                        self.posts_blocked.get(agent.name, 0) + 1
+                    return False, ("their phone won't send it — the group-chat "
+                                   "allowance is spent for today and the plan "
+                                   "resets at midnight. Talking to the people "
+                                   "in the room costs nothing, and neither "
+                                   "does doing something")
+                agent.phone_left = left - 1
             # Pepperton_Gossip: the town group chat (built by popular demand)
             agent.last_text = norm
             agent.recent_own_says.append(toks)

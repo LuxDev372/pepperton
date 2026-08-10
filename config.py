@@ -415,6 +415,24 @@ PROJECTS = [
 ]
 TALK_STREAK_NUDGE = 3   # consecutive talk-only turns before the world objects
 
+# THE PHONE BILL (v3.11). Speech is the only free action in this world.
+# A meal is $5, a drink $4, a room $8, rent falls every three days, permits
+# carry fines and houses get seized — and broadcasting to every villager at
+# once, from anywhere, costs nothing and can be done every fifteen minutes
+# forever. Measured over Pepperton days 164-184: 3,790 group posts against
+# 720 actions of any kind. EIGHTEEN broadcasts per villager per day, five
+# for every single thing anyone did.
+#
+# A tick spent posting is a tick not spent working. This prices the one
+# affordance we left free — in the town's own language, since they already
+# carry phones. The daily allowance resets at midnight; talking to people
+# in the room with you is free and always will be, because that needs no
+# carrier. Ships DARK. Arm it deliberately.
+PHONE = {
+    "enabled": False,
+    "free_posts_per_day": 6,    # group-chat broadcasts; 18/day is the baseline
+}
+
 
 # job -> where that job reports for a shift
 WORKPLACES = {
