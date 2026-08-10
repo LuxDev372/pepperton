@@ -457,11 +457,10 @@ class World:
         if absent:
             lines.append("DOORS NEVER OPENED: " + "; ".join(absent) + ".")
         if getattr(config, "HIRING_ENABLED", True):
-            openings = self.open_positions()
-            if openings:
-                lines.append("SITUATIONS VACANT: " + "; ".join(
-                    f"{j} at {w}" for j, w in sorted(openings.items()))
-                    + " — show up and work.")
+            digest = self.vacancy_digest()
+            if digest:
+                lines.append("SITUATIONS VACANT: " + digest
+                             + " — show up and work.")
         text = "ATTENDANCE LEDGER — " + " ".join(lines)
         self.emit("world", None, text, "the plaza")
         for villager in self.agents.values():
@@ -1569,6 +1568,35 @@ class World:
             if wp and wp in self.locations and job not in held:
                 out[job] = wp
         return out
+
+    def vacancy_digest(self, limit=5):
+        """SITUATIONS VACANT, capped and rotated. (v3.11)
+
+        A town that has finished forty things has forty posts open. Pepperton
+        has finished forty. Listing all of them every evening is not
+        information, it is a wall — MEMORY_TOP_K is 8 and no villager can
+        hold thirty-eight of anything. So it names a handful and SAYS HOW
+        MANY IT DID NOT NAME, which is the honest shape: the town is not
+        told less than the truth, it is told the truth in a size it can
+        carry.
+
+        The window rotates by day, so a different handful surfaces each
+        evening instead of the alphabetical first five forever. Deterministic
+        — it consumes no randomness and cannot move the golden hash."""
+        openings = sorted(self.open_positions().items())
+        if not openings:
+            return ""
+        total = len(openings)
+        if total <= limit:
+            shown, rest = openings, 0
+        else:
+            offset = self.clock.day % total
+            shown = (openings + openings)[offset:offset + limit]
+            rest = total - limit
+        text = "; ".join(f"{j} at {w}" for j, w in shown)
+        if rest:
+            text += f"; and {rest} more posts nobody holds"
+        return text
 
     def make_workplace(self, proj):
         """A finished project becomes a place a person can be PAID to stand in.

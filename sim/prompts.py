@@ -513,10 +513,13 @@ def decision_prompt(agent, world, perceptions, memories):
             ledger_note = "\nThe ledger (public record): " + "; ".join(bits) + "."
         if getattr(config, "HIRING_ENABLED", True) and \
                 not agent.workplace() and hasattr(world, "open_positions"):
-            openings = world.open_positions()
-            if openings:
-                sits = "; ".join(f"{j} at {w}"
-                                 for j, w in sorted(openings.items()))
+            # v3.11: capped and rotated — a town that has finished forty
+            # things has forty posts, and a wall of them is not information.
+            sits = (world.vacancy_digest()
+                    if hasattr(world, "vacancy_digest")
+                    else "; ".join(f"{j} at {w}" for j, w
+                                   in sorted(world.open_positions().items())))
+            if sits:
                 ledger_note += (f"\nSITUATIONS VACANT (you have no job, and "
                                 f"wages are the only honest money): {sits}. "
                                 f"Go there and use the work action — "

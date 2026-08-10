@@ -184,6 +184,35 @@ check("...and its till opens dry, not seeded",
 check("...and it is on the board for anyone",
       reached.world.open_positions().get(job) == place)
 
+# ======================================================================
+#  THE BOARD MUST STAY READABLE. Pepperton has finished FORTY projects.
+#  Reaching back gave it thirty-eight posts in one tick, and SITUATIONS
+#  VACANT is a villager-facing line: ten people with an eight-slot memory
+#  window were about to be handed a wall of murals and playgrounds every
+#  evening, forever. The town is not told less than the truth — it is told
+#  how many it was not shown.
+# ======================================================================
+fresh = Engine(seed=808)
+fw = fresh.world
+check("a small board prints in full, with no tail",
+      "more posts" not in fw.vacancy_digest())
+for i in range(40):
+    p = finished(f"thing {i}", "the park")
+    fw.projects.append(p)
+    fw.make_workplace(p)
+board = fw.open_positions()
+check("forty finished things really do open forty posts", len(board) >= 40)
+digest = fw.vacancy_digest()
+check("...but the evening ledger names only a handful",
+      digest.count(" at ") == 5)
+check("...and says how many it did NOT name",
+      f"and {len(board) - 5} more posts nobody holds" in digest)
+fw.clock.day += 1
+check("...and a different handful surfaces the next evening",
+      fw.vacancy_digest() != digest)
+check("...deterministically — the same day gives the same line",
+      fw.vacancy_digest() == fw.vacancy_digest())
+
 # --------------------------------------------- the builders were told, once
 told = [p for p in someone.pending if "unclaimed" in str(p.get("text", ""))]
 check("a builder is told the post exists", True)   # notification is emitted by

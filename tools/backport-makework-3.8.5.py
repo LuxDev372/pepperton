@@ -75,6 +75,34 @@ EDITS = {
                 out[job] = wp
         return out
 
+    def vacancy_digest(self, limit=5):
+        \"\"\"SITUATIONS VACANT, capped and rotated. (v3.11)
+
+        A town that has finished forty things has forty posts open, and
+        Pepperton has finished forty. Listing all of them every evening is
+        not information, it is a wall — MEMORY_TOP_K is 8 and no villager
+        can hold thirty-eight of anything. So it names a handful and SAYS
+        HOW MANY IT DID NOT NAME: the town is not told less than the truth,
+        it is told the truth in a size it can carry.
+
+        The window rotates by day, so a different handful surfaces each
+        evening instead of the alphabetical first five forever.
+        Deterministic — consumes no randomness.\"\"\"
+        openings = sorted(self.open_positions().items())
+        if not openings:
+            return ""
+        total = len(openings)
+        if total <= limit:
+            shown, rest = openings, 0
+        else:
+            offset = self.clock.day % total
+            shown = (openings + openings)[offset:offset + limit]
+            rest = total - limit
+        text = "; ".join(f"{j} at {w}" for j, w in shown)
+        if rest:
+            text += f"; and {rest} more posts nobody holds"
+        return text
+
     def make_workplace(self, proj):
         \"\"\"A finished project becomes a place a person can be PAID to stand in.
 
@@ -158,6 +186,31 @@ EDITS = {
                               wp)
             elif not wp and openings:""",
             "world: taking a job releases the one you hold",
+        ),
+        (
+            """                lines.append("SITUATIONS VACANT: " + "; ".join(
+                    f"{j} at {w}" for j, w in sorted(openings.items()))
+                    + " — show up and work.")""",
+            """                lines.append("SITUATIONS VACANT: "
+                             + self.vacancy_digest()
+                             + " — show up and work.")""",
+            "world: the evening board stays readable",
+        ),
+    ],
+    "sim/prompts.py": [
+        (
+            """            openings = world.open_positions()
+            if openings:
+                sits = "; ".join(f"{j} at {w}"
+                                 for j, w in sorted(openings.items()))""",
+            """            # v3.11: capped and rotated — a town that has finished forty
+            # things has forty posts, and a wall of them is not information.
+            sits = (world.vacancy_digest()
+                    if hasattr(world, "vacancy_digest")
+                    else "; ".join(f"{j} at {w}" for j, w
+                                   in sorted(world.open_positions().items())))
+            if sits:""",
+            "prompts: a jobless villager is shown a handful, not a wall",
         ),
     ],
     "sim/agents.py": [
