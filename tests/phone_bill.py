@@ -124,8 +124,12 @@ heard = [a for a in cast if a.name != talker.name][0]
 heard.location = talker.location          # somebody to say it to
 ok4, note = post(world, talker, LINES[3])
 check("THE FOURTH IS NOT REFUSED — IT IS SPOKEN ALOUD", ok4 is True)
-check("...and the villager is told why", "wouldn't send it" in note
-      and "said it out loud" in note)
+check("...and the villager is told why, IN THEIR OWN VOICE",
+      note.startswith("couldn't send that to the group"))
+check("...so the memory reads as a sentence", ("I " + note).startswith(
+      "I couldn't send that to the group"))
+check("...and it does not double up on _verb_say's own prefix",
+      note.count("said:") <= 1)
 check("...and it is COUNTED as a blocked post",
       world.posts_blocked.get(talker.name) == 1)
 check("...and it reached the room as speech, not the group chat",

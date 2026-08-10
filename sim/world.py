@@ -1081,14 +1081,23 @@ class World:
                         self.posts_blocked.get(agent.name, 0) + 1
                     spoke, note = self._verb_say(
                         agent, {"action": "say", "text": text})
+                    # The summary is stored as f"I {summary}" and read back
+                    # to the villager as a memory, so it has to be a verb
+                    # phrase in their own voice. The first version said
+                    # "their phone wouldn't send it", which came out as
+                    # "I their phone wouldn't send it" in Nora Tibbs' memory
+                    # at Day 184 18:45 — and _verb_say already prefixes its
+                    # own "said:", so it doubled up too. A town with a whole
+                    # detector class for villagers parroting our strings does
+                    # not get to hand them broken grammar a dozen times a day.
                     if spoke:
-                        return True, ("their phone wouldn't send it — the "
-                                      "group-chat allowance is spent until "
-                                      "midnight — so they said it out loud "
-                                      "instead: " + note)
-                    return False, ("their phone won't send it (allowance spent "
-                                   "until midnight) and saying it aloud did "
-                                   "not land either: " + note)
+                        return True, ("couldn't send that to the group — the "
+                                      "allowance is spent until midnight — "
+                                      "so " + note)
+                    return False, ("couldn't send that to the group (the "
+                                   "allowance is spent until midnight) and "
+                                   "saying it aloud didn't land either: "
+                                   + note)
                 agent.phone_left = left - 1
             # Pepperton_Gossip: the town group chat (built by popular demand)
             agent.last_text = norm

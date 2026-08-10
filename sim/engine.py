@@ -1226,6 +1226,10 @@ class Engine:
             "minds": self.minds_report(),
             # v3.9.4 — operator-facing only; see World._verb_idle
             "unknown_verbs": dict(getattr(self.world, "unknown_verbs", {})),
+            # THE PHONE BILL: how often the plan refused a broadcast, by
+            # villager. If this stays near zero the allowance never bound and
+            # the lever did nothing. Operator-facing; no villager sees it.
+            "posts_blocked": dict(getattr(self.world, "posts_blocked", {})),
             "flags": self.flags(),
         }
 
