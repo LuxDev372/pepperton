@@ -35,7 +35,24 @@ HI = int(sys.argv[3]) if len(sys.argv) > 3 else 183
 
 LINE = re.compile(r"^\[Day (\d+), (\d\d):\d\d\] \[([^\]]*)\] ([A-Z]+)\s+([^:]+): ")
 
-cell = defaultdict(Counter)      # (day, hour, loc) -> villager -> events there
+# WHO IS A VILLAGER. The transcript does not say. "SAY Ash Holt -> Sam
+# Fletcher:" puts the whole arrow form in the agent field, so the first
+# version of this tool counted "Ash Holt" and "Ash Holt -> Sam Fletcher" as
+# two different people and printed nine Ash columns — and the inflated
+# head-counts contaminated the crowd percentage as well. The cast is read
+# from the town's own saved state; anyone else in the transcript is a
+# townsperson, who occupies a room but is not one of the minds.
+def load_cast(path="data/world_state.json"):
+    try:
+        import json
+        return set(json.load(open(path))["agents"])
+    except Exception:
+        return set()
+
+CAST = load_cast()
+
+cell = defaultdict(Counter)      # (day, hour, loc) -> person -> events there
+npc_seen = set()                 # townsfolk: present, but not minds
 posts = defaultdict(Counter)     # day -> villager -> group posts
 days = set()
 
@@ -45,8 +62,12 @@ for raw in open(PATH, errors="replace"):
         continue
     day, hour, loc, kind, who = (int(m.group(1)), int(m.group(2)),
                                  m.group(3), m.group(4), m.group(5).strip())
+    who = who.split(" -> ")[0].strip()          # "X -> Y" is still X speaking
     if kind == "WORLD" or not who or who == "WORLD":
         continue
+    if CAST and who not in CAST:
+        npc_seen.add(who)                        # scenery: occupies a room,
+        # but never appears in the per-villager table
     days.add(day)
     cell[(day, hour, loc)][who] += 1
     if kind == "GOSSIP":
@@ -110,7 +131,8 @@ print()
 print("=" * 96)
 print("PER VILLAGER — what reached them per day  (broadcast heard + local heard)")
 print("=" * 96)
-everyone = sorted({p for d in rows for p in rows[d]["cast"]})
+everyone = sorted({p for d in rows for p in rows[d]["cast"]}
+                  & (CAST or {p for d in rows for p in rows[d]["cast"]}))
 print(f"{'day':>4}  " + "  ".join(f"{n.split()[0][:7]:>7}" for n in everyone))
 for d in sorted(base)[-3:] + after:
     cells = "  ".join(
@@ -119,3 +141,9 @@ for d in sorted(base)[-3:] + after:
     print(f"{d:>4}  {cells}")
 print()
 print("Watch Nora. She was awake and alone when this was armed.")
+if npc_seen:
+    print(f"\n({len(npc_seen)} townsfolk counted for room occupancy, excluded "
+          f"from the per-villager table: {', '.join(sorted(npc_seen))})")
+if not CAST:
+    print("\n(!) data/world_state.json not readable — could not tell villagers "
+          "from townsfolk; every name in the transcript is listed.")
