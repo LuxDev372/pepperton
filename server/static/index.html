@@ -427,7 +427,8 @@
 /* =====================================================================
    STATE
 ===================================================================== */
-const W = 1000, H = 700;          // virtual map coordinates
+const W = 1000, BASE_H = 700;     // virtual map coordinates
+let H = BASE_H;                   // grows when the town builds (v3.11)
 const state = {
   snap: null,                     // last snapshot
   events: [],                     // accumulated events (last ~300)
@@ -497,13 +498,55 @@ function buildLayout(locations) {
       extras.push(loc);
     }
   }
-  for (const loc of extras) {
-    const s = EXTRA_SLOTS[extraIdx % EXTRA_SLOTS.length];
-    const bump = Math.floor(extraIdx / EXTRA_SLOTS.length) * 14;
-    layout[loc.name] = { x: s[0] + bump, y: s[1] - bump, w: s[2], h: s[3],
-                         isHome: false, label: loc.name, radio: loc.radio };
-    extraIdx++;
+  // v3.11: a town that has finished forty things HAS forty buildings. Four
+  // hand-placed slots stacked them into four unreadable piles, 14px apart.
+  // Built places now get a compact auto-shrinking grid under the fixed town,
+  // and the map grows downward to hold them.
+  let bandH = 0;
+  if (extras.length) {
+    const few = extras.length <= EXTRA_SLOTS.length;
+    if (few) {
+      for (const loc of extras) {
+        const s = EXTRA_SLOTS[extraIdx % EXTRA_SLOTS.length];
+        layout[loc.name] = { x: s[0], y: s[1], w: s[2], h: s[3],
+                             isHome: false, label: loc.name, radio: loc.radio };
+        extraIdx++;
+      }
+    } else {
+      // The town's own name is on nearly every building it ever finished
+      // and it costs a third of the tile. Work out the common prefix from
+      // the labels themselves, so this is right in any town. (v3.11)
+      let TOWN_PREFIX = null;
+      if (extras.length > 3) {
+        const counts = {};
+        for (const l of extras) {
+          const mm = l.name.match(/^([A-Za-z]+)['\u2019]?s?[ _-]/);
+          if (mm) { const k = mm[1].toLowerCase();
+                    counts[k] = (counts[k] || 0) + 1; }
+        }
+        let best = null, n = 0;
+        for (const k in counts) if (counts[k] > n) { best = k; n = counts[k]; }
+        if (best && n >= 3)
+          TOWN_PREFIX = new RegExp("^" + best + "['\u2019]?s?[ _-]+", "i");
+      }
+      const margin = 26, gap = 6, per = 10, th = 32;
+      const tw = Math.floor((W - 2 * margin - (per - 1) * gap) / per);
+      const rows = Math.ceil(extras.length / per);
+      extras.forEach((loc, i) => {
+        const r = Math.floor(i / per), c = i % per;
+        const m = Math.min(per, extras.length - r * per);
+        const total = m * tw + (m - 1) * gap;
+        const base = TOWN_PREFIX ? loc.name.replace(TOWN_PREFIX, "")
+                                 : loc.name;
+        const nm = base.length > 14 ? base.slice(0, 13) + "\u2026" : base;
+        layout[loc.name] = { x: (W - total) / 2 + c * (tw + gap),
+                             y: 572 + r * (th + gap), w: tw, h: th,
+                             isHome: false, label: nm, radio: loc.radio };
+      });
+      bandH = rows * (th + gap) + 16;
+    }
   }
+  const homesY = 565 + bandH;
   // homes: cottages along the bottom edge — auto-shrink, wrap when crowded
   const n = homes.length;
   if (n > 0) {
@@ -518,7 +561,7 @@ function buildLayout(locations) {
       const cw = Math.max(56, Math.min(155, (W - 2 * margin - (m - 1) * gap) / m));
       const total = m * cw + (m - 1) * gap;
       let x = (W - total) / 2;
-      const y = 565 + (rows > 1 ? (r - (rows - 1)) * (rowH + 12) + (rows - 1) * 22 : 0);
+      const y = homesY + (rows > 1 ? (r - (rows - 1)) * (rowH + 12) + (rows - 1) * 22 : 0);
       for (const loc of rowLocs) {
         layout[loc.name] = { x, y, w: cw, h: rowH, isHome: true,
                              label: loc.home_of ? firstName(loc.home_of) + "’s"
@@ -529,6 +572,12 @@ function buildLayout(locations) {
       }
     }
   }
+  // the map is as tall as the town needs it to be — and the viewport fit
+  // is computed in resize(), which only ran at startup and on window
+  // resize. Growing H without recomputing the scale is why the built band
+  // ran off the bottom of the screen instead of shrinking to fit. (v3.11)
+  const newH = BASE_H + bandH;
+  if (newH !== H) { H = newH; try { resize(); } catch (e) {} }  // recompute the fit
   return layout;
 }
 function layoutSignature(locations) {
