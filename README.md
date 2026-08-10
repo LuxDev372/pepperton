@@ -350,7 +350,7 @@ from a parallel world).
 ## Testing
 
 ```bash
-python tests/selftest.py     # 188 behavioural regressions
+python tests/selftest.py     # 306 behavioural regressions
 python tests/goldenhash.py   # the fingerprint
 python tests/store.py        # the durable persistence boundary
 ```
@@ -358,8 +358,19 @@ python tests/store.py        # the durable persistence boundary
 Current baseline:
 
 ```
-cbfef7f9b220c807f9d394020d5cd24b35de9b1658f50be562e92032d435270b
+0491522344a94a0bc9c23cbaf37fdb4825a643cdfee2f5fb1f2388d3a285b10b
 ```
+
+Re-baselined at **v3.10.0**. The previous value —
+`cbfef7f9b220c807f9d394020d5cd24b35de9b1658f50be562e92032d435270b` —
+stood unmoved from v3.5.0 through v3.9.5. Exactly one commit in the
+eleven-PR stack moves it: *"Schedule policy outside simulation lock"*
+(PR #6), which takes model calls off the world lock and therefore
+changes the order decisions are gathered in. Every other commit in that
+stack — the command boundary, and the whole social layer through to the
+UI — is behaviour-neutral, verified commit by commit. The new stream is
+deterministic and independent of pool size: identical digest at
+`POLICY_MAX_WORKERS` of 1, 2, 8 and 16, and across repeated runs.
 
 `goldenhash.py` runs two seeded mock towns for 800 ticks each and hashes
 every event plus the final economic state. A **pure refactor must leave

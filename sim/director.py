@@ -13,6 +13,7 @@ import random
 import config
 from sim import brains
 from sim.agents import Agent
+from sim.causality import Command
 
 
 class Director:
@@ -20,6 +21,7 @@ class Director:
         self.engine = engine
         self.rng = random.Random(f"director:{seed}")
         self.strangers_added = 0
+        self.last_command_result = None
 
     # ------------------------------------------------------------------
     def step(self):
@@ -29,29 +31,45 @@ class Director:
         if self.rng.random() < config.CHAOS["events_per_day"] / ticks_per_day:
             self.trigger()
 
-    def trigger(self, name=None):
-        """Fire one chaos event (random weighted unless named). Returns a
-        short description of what happened, for the API.
+    def trigger(self, name=None, source=None):
+        """Fire one chaos event and preserve the legacy summary return."""
+        source = source or ("manual" if name is not None else "director")
+        return self.trigger_command(name, source=source).summary
 
-        A NAMED event is a human pressing the god button; an unnamed one is
-        the dice. The experiment ledger records both, and marks which was
-        which — an intervention nobody wrote down is how a story becomes
-        mistaken for a finding."""
-        manual = name is not None
+    def trigger_command(self, name=None, source=None):
+        """Apply one Director event through the shared command boundary."""
+        source = source or ("manual" if name is not None else "director")
+        result = self.engine.dispatch(Command(
+            kind="director.event", source=source, payload={"event": name},
+        ))
+        self.last_command_result = result
+        return result
+
+    def apply_command(self, command):
+        """Choose and apply the Director effect inside its command envelope."""
+        name = command.payload.get("event")
         event_weights = dict(config.CHAOS["weights"])
         if self.strangers_added >= config.CHAOS["max_strangers"]:
             event_weights.pop("stranger", None)
         if name is None:
+            if not event_weights:
+                return False, "no Director events available"
             names = list(event_weights)
             name = self.rng.choices(
                 names, weights=[event_weights[n] for n in names])[0]
+        command.payload["event"] = name
+        command.topic = command.topic or name
+        command.thread_id = command.thread_id or f"thread:{name}"
+        if command.salience == "normal":
+            command.salience = "high"
         fn = getattr(self, f"_ev_{name}", None)
         if fn is None:
-            return f"unknown event {name!r}"
+            return False, f"unknown event {name!r}"
         exp = getattr(self.engine, "exp", None)
         if exp is not None:
             world = self.engine.world
-            exp.note_director(name, manual, world.tick_no, world.clock.day)
+            exp.note_director(name, command.source == "manual",
+                              world.tick_no, world.clock.day)
         return fn()
 
     # ------------------------------------------------------------ helpers

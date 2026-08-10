@@ -25,9 +25,12 @@ check("snapshot renders the public social projection", "renderSocial(snap.social
 check("social action posts through the existing possession boundary",
       'const { ok, data } = await seatPost(act);' in PAGE and
       'const act = { action: "interact", act: actName };' in PAGE)
-check("stock UI submits typed project contributions",
-      'kind: "project_contribution"' in PAGE and
+check("stock UI submits typed project-completion commitments",
+      'kind: "project_complete"' in PAGE and
+      'condition: "contribute " + Number(hours)' in PAGE and
       'choose a project and hours together' in PAGE)
+check("acceptance uses the authoritative commitment field",
+      'if (actName === "accept") act.commitment = commitment;' in PAGE)
 check("stock UI no longer accepts free-form commitment prose",
       'id="socialCommitment"' not in PAGE)
 
