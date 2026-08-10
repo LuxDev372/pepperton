@@ -114,12 +114,26 @@ post(world, talker, LINES[1])
 post(world, talker, LINES[2])
 check("...to nothing after three", world.phone_left(talker) == 0)
 
+# IT DOWNGRADES, IT DOES NOT REFUSE. A refused action still costs the tick —
+# engine.py takes result.accepted and moves on either way. Pompeii, Day 267,
+# 00:15-04:30: Ida and Lennox spent four and a half hours on "started to say
+# the same thing again, trailed off" while the clock ran. A brake that burns
+# the time it was meant to free is worse than no brake. The phone not sending
+# costs REACH, not TIME.
+heard = [a for a in cast if a.name != talker.name][0]
+heard.location = talker.location          # somebody to say it to
 ok4, note = post(world, talker, LINES[3])
-check("THE FOURTH IS REFUSED", ok4 is False)
-check("...with a reason a villager can act on",
-      "allowance is spent" in note and "room costs nothing" in note)
-check("...and it is COUNTED, not silently dropped",
+check("THE FOURTH IS NOT REFUSED — IT IS SPOKEN ALOUD", ok4 is True)
+check("...and the villager is told why", "wouldn't send it" in note
+      and "said it out loud" in note)
+check("...and it is COUNTED as a blocked post",
       world.posts_blocked.get(talker.name) == 1)
+check("...and it reached the room as speech, not the group chat",
+      any(e.get("type") == "say" and e.get("agent") == talker.name
+          and LINES[3][:20] in str(e.get("text", ""))
+          for e in world.recent_events(30))
+      if hasattr(world, "recent_events") else True)
+check("...and the tick was NOT wasted", ok4 is True)
 
 # ------------------------------------- what the meter must never touch
 before = world.phone_left(talker)
@@ -127,7 +141,10 @@ ok, _ = world.execute(talker, {"action": "say", "text": LINES[4]})
 check("TALKING TO THE ROOM IS FREE — it still works with an empty plan", ok)
 check("...and costs nothing", world.phone_left(talker) == before)
 
-other = [a for a in cast if a.name != talker.name][0]
+# ...and to somebody ELSEWHERE, because the world rightly refuses a phone
+# call to a person standing next to you
+other = [a for a in cast
+         if a.name != talker.name and a.location != talker.location][0]
 ok, _ = world.execute(talker, {"action": "text", "to": other.name,
                                "text": LINES[5]})
 check("a PRIVATE text is free too", ok)
@@ -150,6 +167,8 @@ victim.last_text = " ".join(LINES[7].lower().split())
 ok, note = post(world, victim, LINES[7])
 check("an exact repeat is refused for BEING A REPEAT, not for data",
       ok is False and "allowance" not in note)
+check("...and the repeat guard fires BEFORE the plan is consulted",
+      "sending it again" in note)
 check("...and that refusal was not counted against the plan",
       world.posts_blocked.get(victim.name, 0) == 0)
 
@@ -172,6 +191,13 @@ line = prompts.decision_prompt(talker, world, [], [])
 check("the prompt tells them what is left",
       "group post" in line and "left today" in line)
 check("...and that the room is free", "talking to people here is free" in line)
+# and when the plan is spent, the readout says what will happen instead
+spent = cast[2]
+while (world.phone_left(spent) or 0) > 0:
+    spent.phone_left = 0
+line_spent = prompts.decision_prompt(spent, world, [], [])
+check("a villager with no posts left is told what happens if they try",
+      "said out loud" in line_spent)
 config.PHONE = {"enabled": False}
 line_off = prompts.decision_prompt(talker, world, [], [])
 check("with no plan the prompt says nothing about phones",

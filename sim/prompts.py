@@ -395,8 +395,13 @@ def decision_prompt(agent, world, perceptions, memories):
     phone_note = ""
     _pl = world.phone_left(agent) if hasattr(world, "phone_left") else None
     if _pl is not None:
-        phone_note = (f". Phone: {_pl} group post{'' if _pl == 1 else 's'} "
-                      f"left today (talking to people here is free)")
+        phone_note = (
+            (f". Phone: {_pl} group post{'' if _pl == 1 else 's'} left today "
+             f"(talking to people here is free)")
+            if _pl > 0 else
+            ". Phone: no group posts left today — anything you try to post "
+            "gets said out loud to whoever is here instead, and the plan "
+            "resets at midnight")
     mem_lines = "\n".join(
         f"- (day {m['day']} {m['sim_time']}) {m['text']}" for m in memories
     ) or "- nothing comes to mind"

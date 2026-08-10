@@ -1060,13 +1060,35 @@ class World:
             left = self.phone_left(agent)
             if left is not None:
                 if left <= 0:
+                    # IT DOWNGRADES, IT DOES NOT REFUSE.
+                    #
+                    # A refused action still costs the villager their tick —
+                    # engine.py takes result.accepted and moves on either way.
+                    # Pompeii, Day 267, 00:15-04:30: Ida Merriweather and
+                    # Lennox Tibbs spent four and a half hours on
+                    # "started to say the same thing again, trailed off",
+                    # the Paraphrase Act refusing them over and over while
+                    # the clock ran. A brake that burns the time it was
+                    # meant to free is worse than no brake.
+                    #
+                    # So the phone not sending costs REACH, not TIME: the
+                    # words come out of their mouth instead, to whoever is
+                    # standing there, for free. Same class as an unknown
+                    # verb becoming "passed the time" — the world's handling
+                    # of an action it cannot perform as asked. If the room
+                    # is empty the Soapbox Law is already waiting.
                     self.posts_blocked[agent.name] = \
                         self.posts_blocked.get(agent.name, 0) + 1
-                    return False, ("their phone won't send it — the group-chat "
-                                   "allowance is spent for today and the plan "
-                                   "resets at midnight. Talking to the people "
-                                   "in the room costs nothing, and neither "
-                                   "does doing something")
+                    spoke, note = self._verb_say(
+                        agent, {"action": "say", "text": text})
+                    if spoke:
+                        return True, ("their phone wouldn't send it — the "
+                                      "group-chat allowance is spent until "
+                                      "midnight — so they said it out loud "
+                                      "instead: " + note)
+                    return False, ("their phone won't send it (allowance spent "
+                                   "until midnight) and saying it aloud did "
+                                   "not land either: " + note)
                 agent.phone_left = left - 1
             # Pepperton_Gossip: the town group chat (built by popular demand)
             agent.last_text = norm
