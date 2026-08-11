@@ -73,12 +73,9 @@ def agent(name: str):
 @app.post("/api/control/pause")
 async def pause():
     # Deliberately NOT under engine.lock. In live mode a tick holds that
-    # lock while the models think, so taking it here left Pause ignoring
-    # the operator for up to the Ollama timeout — worse than the benign
-    # race two simultaneous flips could cause. The loop reads the flag
-    # once per tick.
-    engine.paused = not engine.paused
-    return {"paused": engine.paused}
+    # lock while the models think. The pause gate makes the running tick
+    # discard incomplete policy results at its next safe boundary instead.
+    return engine.toggle_pause()
 
 
 @app.post("/api/recast")

@@ -4,6 +4,7 @@ from concurrent.futures import Future, wait
 from dataclasses import dataclass
 from queue import Empty, Queue
 import threading
+import time
 
 from sim.policy import Decision, Reflection
 
@@ -134,9 +135,22 @@ class PolicyScheduler:
             self._inflight[key] = future
             return future, "submitted"
 
-    def _collect(self, jobs, expected_type, fallback):
+    def _collect(self, jobs, expected_type, fallback, cancel_event=None):
         futures = [future for _, future, _, _ in jobs if future is not None]
-        done, _ = wait(futures, timeout=self.timeout) if futures else (set(), set())
+        done = set()
+        if futures:
+            deadline = time.monotonic() + self.timeout
+            remaining = set(futures)
+            # A provider request already running in another thread cannot be
+            # forcibly stopped safely. Polling lets the engine stop waiting
+            # for it, though, and prevents its result from changing the town
+            # after an operator has asked to pause.
+            while remaining and not (cancel_event and cancel_event.is_set()):
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    break
+                complete, remaining = wait(remaining, timeout=min(left, 0.05))
+                done.update(complete)
         outcomes = {}
         for key, future, task, status in jobs:
             if future is None:
@@ -145,8 +159,10 @@ class PolicyScheduler:
                 outcomes[key] = PolicyOutcome(fallback(status, detail), status, detail)
                 continue
             if future not in done:
-                detail = f"after {self.timeout:.3f}s"
-                outcomes[key] = PolicyOutcome(fallback("timeout", detail), "timeout", detail)
+                cancelled = bool(cancel_event and cancel_event.is_set())
+                status = "paused" if cancelled else "timeout"
+                detail = "pause requested" if cancelled else f"after {self.timeout:.3f}s"
+                outcomes[key] = PolicyOutcome(fallback(status, detail), status, detail)
                 if future.cancel():
                     with self._lock:
                         if self._inflight.get(key) is future:
@@ -166,7 +182,7 @@ class PolicyScheduler:
                     del self._inflight[key]
         return outcomes
 
-    def decide(self, tasks):
+    def decide(self, tasks, cancel_event=None):
         jobs = []
         for task in tasks:
             key = task.agent_name
@@ -175,10 +191,10 @@ class PolicyScheduler:
         def fallback(status, detail):
             return Decision({"action": "idle", "note": f"policy {status}: {detail}"},
                             reason=f"policy {status}; fallback idle")
-        outcomes = self._collect(jobs, Decision, fallback)
+        outcomes = self._collect(jobs, Decision, fallback, cancel_event)
         return [outcomes[task.agent_name] for task in tasks]
 
-    def reflect(self, tasks):
+    def reflect(self, tasks, cancel_event=None):
         jobs = []
         for task in tasks:
             key = task.agent_name
@@ -186,7 +202,7 @@ class PolicyScheduler:
             jobs.append((key, future, task, status))
         def fallback(status, detail):
             return Reflection(f"Policy {status}; the day remains unfinished: {detail}")
-        outcomes = self._collect(jobs, Reflection, fallback)
+        outcomes = self._collect(jobs, Reflection, fallback, cancel_event)
         return [outcomes[task.agent_name] for task in tasks]
 
     def close(self):

@@ -22,6 +22,10 @@ for marker in (
     check(f"stock UI exposes {marker}", marker in PAGE)
 
 check("snapshot renders the public social projection", "renderSocial(snap.social);" in PAGE)
+check("pause immediately acknowledges a request while a tick unwinds",
+      'snap.pause_pending ? "Pausing…"' in PAGE and
+      'state.snap.pause_pending = requestedPause;' in PAGE and
+      'if (pauseRequestInFlight) return;' in PAGE)
 check("social action posts through the existing possession boundary",
       'const { ok, data } = await seatPost(act);' in PAGE and
       'const act = { action: "interact", act: actName };' in PAGE)
