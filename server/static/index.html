@@ -98,6 +98,7 @@
   }
   #pauseBtn:hover { border-color: var(--accent); color: var(--accent); }
   #pauseBtn.paused { border-color: var(--accent); color: var(--accent); }
+  #pauseBtn.pending { border-color: var(--ink-dim); color: var(--ink-dim); }
 
   /* ---------------- main layout ---------------- */
   main { flex: 1; display: flex; min-height: 0; }
@@ -853,6 +854,8 @@ function handleSnapshot(snap) {
   }
 }
 
+let pauseRequestInFlight = false;
+
 function updateHeader(snap) {
   const clock = $("clock");
   clock.textContent = "Day " + snap.day + " — " + snap.hhmm;
@@ -877,16 +880,39 @@ function updateHeader(snap) {
   $("seedbadge").textContent = seedTxt;
   renderVitals(snap.vitals);
   const pb = $("pauseBtn");
-  pb.textContent = snap.paused ? "Resume" : "Pause";
-  pb.className = snap.paused ? "paused" : "";
+  pb.textContent = snap.pause_pending ? "Pausing…" : (snap.paused ? "Resume" : "Pause");
+  pb.className = snap.pause_pending ? "pending" : (snap.paused ? "paused" : "");
+  pb.setAttribute("aria-pressed", String(!!snap.paused));
+  pb.disabled = pauseRequestInFlight;
 }
 
 $("pauseBtn").addEventListener("click", async () => {
+  if (pauseRequestInFlight) return;
+  pauseRequestInFlight = true;
+  const pb = $("pauseBtn");
+  const previous = state.snap && { paused: state.snap.paused, pause_pending: state.snap.pause_pending };
+  const requestedPause = !state.snap || !state.snap.paused;
+  if (state.snap) {
+    state.snap.paused = requestedPause;
+    state.snap.pause_pending = requestedPause;
+    updateHeader(state.snap);
+  } else {
+    pb.textContent = "Pausing…";
+    pb.className = "pending";
+    pb.disabled = true;
+  }
   try {
     const r = await fetch("/api/control/pause", { method: "POST" });
+    if (!r.ok) throw new Error("pause request failed");
     const j = await r.json();
-    if (state.snap) { state.snap.paused = j.paused; updateHeader(state.snap); }
-  } catch (e) {}
+    if (state.snap) { Object.assign(state.snap, j); updateHeader(state.snap); }
+  } catch (e) {
+    if (state.snap && previous) { Object.assign(state.snap, previous); updateHeader(state.snap); }
+  } finally {
+    pauseRequestInFlight = false;
+    if (state.snap) updateHeader(state.snap);
+    else pb.disabled = false;
+  }
 });
 
 /* =====================================================================

@@ -126,6 +126,9 @@ class Engine:
         self.world.folk = self.folk   # the work verb reaches odd jobs
         self.exp = ExperimentLedger()   # what prevents the TV from lying
         self.paused = False
+        self._pause_event = threading.Event()
+        self._pause_lock = threading.RLock()
+        self._tick_active = False
         self.running = False
         self._stop_event = threading.Event()
         self.lock = threading.RLock()   # guards world/brains vs API threads
@@ -758,18 +761,56 @@ class Engine:
                 self._reflection_retry_day = reflection_day
 
     # -------------------------------------------------------------- step
+    def toggle_pause(self):
+        """Toggle the run gate without waiting for model calls or world state."""
+        with self._pause_lock:
+            self.paused = not self.paused
+            if self.paused:
+                self._pause_event.set()
+            else:
+                self._pause_event.clear()
+            return self.pause_status()
+
+    def pause_status(self):
+        """The public pause state, including whether a current tick is unwinding."""
+        with self._pause_lock:
+            return {
+                "paused": self.paused,
+                "pause_pending": self.paused and self._tick_active,
+            }
+
     def step(self):
         with self._step_lock:
-            # Policy calls run only after the immutable inputs are frozen.
-            with self.lock:
-                tasks = self._prepare_tick()
-            outcomes = self.scheduler.decide(tasks)
-            with self.lock:
-                reflection_tasks = self._apply_decisions(tasks, outcomes)
-            reflection_outcomes = self.scheduler.reflect(reflection_tasks)
-            with self.lock:
-                self._apply_reflections(reflection_tasks, reflection_outcomes)
-                self._cached_snapshot = self._snapshot_locked(0)
+            with self._pause_lock:
+                self._tick_active = True
+            try:
+                if self._pause_event.is_set():
+                    return
+                # Policy calls run only after the immutable inputs are frozen.
+                with self.lock:
+                    tasks = self._prepare_tick()
+                if self._pause_event.is_set():
+                    return
+                outcomes = self.scheduler.decide(tasks, self._pause_event)
+                # Do not apply decisions that arrived after the operator
+                # paused the town. Live provider calls may finish in their
+                # own time, but an abandoned proposal must not become action.
+                if self._pause_event.is_set():
+                    return
+                with self.lock:
+                    reflection_tasks = self._apply_decisions(tasks, outcomes)
+                if self._pause_event.is_set():
+                    return
+                reflection_outcomes = self.scheduler.reflect(
+                    reflection_tasks, self._pause_event)
+                if self._pause_event.is_set():
+                    return
+                with self.lock:
+                    self._apply_reflections(reflection_tasks, reflection_outcomes)
+                    self._cached_snapshot = self._snapshot_locked(0)
+            finally:
+                with self._pause_lock:
+                    self._tick_active = False
 
     # --------------------------------------------------------------- run
     def run_headless(self, ticks):
@@ -863,7 +904,7 @@ class Engine:
             import traceback
             pace = config.PACING[config.PACING_MODE]["real_seconds_per_tick"]
             while self.running:
-                if not self.paused:
+                if not self._pause_event.is_set():
                     try:
                         self.step()
                     except (OSError, sqlite3.Error):
@@ -954,7 +995,7 @@ class Engine:
             with self.lock:
                 return self._snapshot_locked(since_seq)
         out = dict(cached)
-        out["paused"] = self.paused   # the one field that changes between ticks
+        out.update(self.pause_status())  # changes independently of ticks
         if since_seq:
             out["events"] = [e for e in cached["events"] if e["seq"] > since_seq]
         return out
@@ -969,7 +1010,7 @@ class Engine:
             "hhmm": world.clock.hhmm,
             "tick": world.tick_no,
             "is_night": world.clock.is_night,
-            "paused": self.paused,
+            **self.pause_status(),
             "mock": config.MOCK_MODE,
             "seed": self.seed,
             "locations": [
