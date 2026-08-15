@@ -73,6 +73,7 @@ python run.py                    # observatory at http://localhost:8811
 python run.py --headless 96      # one sim-day fast, no server (smoke test)
 python run.py --seed 7           # pin the cast (random archetypes per seed)
 python run.py --live             # real Ollama minds (default is mock)
+python run.py --fresh            # discard generated data and start clean
 ```
 
 Mock mode (default) runs the whole town on scripted brains — no GPU —
